@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 
 # Path where folder has to change
-folder_date = "23"
+folder_date = "30"
 folder_month = "September"
 current_date = datetime.now().strftime("%Y%m%d")
 filter_date = datetime.now().strftime("%d %B %Y")
@@ -19,11 +19,11 @@ except Exception as e:
     exit()
 
 # Filtering data master
-df_filtered = master[master["tgl"] == pd.to_datetime(filter_date)]# Double Check when daily late
+df_filtered = master[master["tgl"] == pd.to_datetime(filter_date)]# Double Check when daily task not sended on Time
 
 # Path where the output files will be saved
 output_dir = f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(output_dir, exist_ok=True) 
 
 # Pemetaan kolom lama ke kolom baru
 pemetaan_kolom = {

@@ -10,9 +10,9 @@ import re
 current_date = datetime.now().strftime("%d %B %Y")
 
 # Define the folder paths
-folder_date = "23"
-folder_month = "September"
-format_date = "20240923"
+folder_date = "30" # Change it
+folder_month = "September" # Change it
+format_date = "20240930" # Change it
 base_path = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}")
 path_file = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {format_date}.xlsx")
 
@@ -23,14 +23,20 @@ email_list = pd.read_excel(file)
 
 # Load data daily
 dealer = pd.read_excel(path_file)
+
+# Moxa
 main_dealer_filtered = dealer['Main Dealer'].unique()
 filter_email = email_list[email_list['Main Dealer'].isin(main_dealer_filtered)]
 filter_email_MD = filter_email['Main Dealer'].unique()
+
+# DaaS
 dealer_DaaS = pd.read_excel(file_DaaS)
 filter_DaaS = dealer_DaaS[dealer_DaaS['Dispatch Date'] == pd.to_datetime(current_date)] # Change the date to the current date
 DaaS_main_dealer = filter_DaaS['Main Dealer'].unique()
 filter_email_DaaS = email_list[email_list['Main Dealer'].isin(DaaS_main_dealer)]
 filter_email_DaaS_MD = filter_email_DaaS['Main Dealer'].unique()
+
+# Moxa DaaS
 over_lapping_maindealer = set(dealer['Main Dealer']).intersection(filter_DaaS["Main Dealer"])
 over_lapping_maindealer_list = list(over_lapping_maindealer)
 filter_email_DaaS_MOXA = email_list[email_list['Main Dealer'].isin(over_lapping_maindealer)]
@@ -100,10 +106,10 @@ Riyadh Akhdan Syafi<br>
     attach_files(mail, attachment_filenames)
 
     # Display
-    mail.Display()
+    # mail.Display()
 
     # Sending
-    # mail.Send()
+    mail.Send()
 
 def extract_dealer_name(filename):
     match = re.search(r'FIFGROUP \d+ (.+)\.xlsx', filename)
@@ -113,7 +119,6 @@ def extract_dealer_name(filename):
         return dealer_name
     return None
 
-# Set to store dealers whose DaaS files have already been processed
 processed_dealers = set()
 
 # Iterate through files in the base_path directory

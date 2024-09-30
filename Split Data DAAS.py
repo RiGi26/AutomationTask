@@ -4,7 +4,7 @@ from datetime import datetime
 import numpy as np
 
 # Path where folder has to change
-folder_date = "23"
+folder_date = "25"
 folder_month = "September"
 current_date = datetime.now().strftime("%Y%m%d")
 filter_date = datetime.now().strftime("%d %B %Y")
@@ -19,7 +19,9 @@ output_dir = (
 )
 
 # Get unique values from the specified column
-df_filter = df[df["Dispatch Date"] == pd.to_datetime(filter_date)] # Double Check when daily late
+df_filter = df[
+    df["Dispatch Date"] == pd.to_datetime(filter_date)
+]  # Double Check when daily late
 unique_values = df_filter["Main Dealer"].unique()
 
 # Create the output directory if it doesn't exist
@@ -140,7 +142,7 @@ for unique in unique_values:
 
     else:
         # Filter data for other main dealers
-        df_output = df_final[df["Main Dealer"] == unique].copy()
+        df_output = df_final[df_filter["Main Dealer"] == unique].copy()
 
         # Ensure No HP starts with '0'
         df_output["No HP"] = (
