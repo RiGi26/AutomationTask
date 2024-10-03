@@ -5,15 +5,15 @@ import numpy as np
 from pathlib import Path
 
 # Path where folder has to change
-folder_date = "30"
-folder_month = "September"
+folder_date = "03"
+folder_month = "Oktober"
 current_date = datetime.now().strftime("%Y%m%d")
 filter_date = datetime.now().strftime("%d %B %Y")
 
 # Path to the Excel file Master and Extracted File
 path = Path("D:\\Daily MOXA\\Master Leads Interest 2024.xlsx")
 try:
-    master = pd.read_excel(path, sheet_name="September")
+    master = pd.read_excel(path, sheet_name="Oktober")
 except Exception as e:
     print(f"Failed to read master file: {e}")
     exit()

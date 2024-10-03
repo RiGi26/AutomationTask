@@ -10,9 +10,9 @@ import re
 current_date = datetime.now().strftime("%d %B %Y")
 
 # Define the folder paths
-folder_date = "30" # Change it
-folder_month = "September" # Change it
-format_date = "20240930" # Change it
+folder_date = "03" # Change it
+folder_month = "Oktober" # Change it
+format_date = "20241003" # Change it
 base_path = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}")
 path_file = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {format_date}.xlsx")
 
@@ -58,9 +58,9 @@ def attach_files(mail, attachment_filenames):
                     print(f"Failed to attach {attachment_path}: {e}")
                 time.sleep(1)  # Add a short delay before attaching the next file
             else:
-                print(f"Attachment not found: {attachment_path}")
+                continue
         else:
-            print(f"Invalid path base for attachment: {filename}") 
+            continue
 
 def send_email(row, main_dealer_name, project_type, base_path):
     if project_type == 'DaaS & MOXA':
