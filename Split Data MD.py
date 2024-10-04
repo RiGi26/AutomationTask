@@ -4,16 +4,14 @@ from datetime import datetime
 import numpy as np
 from pathlib import Path
 
-# Path where folder has to change
-folder_date = "30"
-folder_month = "September"
+folder_date = "04"
+folder_month = "Oktober"
 current_date = datetime.now().strftime("%Y%m%d")
 filter_date = datetime.now().strftime("%d %B %Y")
 
-# Path to the Excel file Master and Extracted File
 path = Path("D:\\Daily MOXA\\Master Leads Interest 2024.xlsx")
 try:
-    master = pd.read_excel(path, sheet_name="September")
+    master = pd.read_excel(path, sheet_name="Oktober")
 except Exception as e:
     print(f"Failed to read master file: {e}")
     exit()
@@ -21,11 +19,9 @@ except Exception as e:
 # Filtering data master
 df_filtered = master[master["tgl"] == pd.to_datetime(filter_date)]# Double Check when daily task not sended on Time
 
-# Path where the output files will be saved
 output_dir = f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}"
 os.makedirs(output_dir, exist_ok=True) 
 
-# Pemetaan kolom lama ke kolom baru
 pemetaan_kolom = {
     "Id Leads Data User": "id",
     "Nama": "Nama",
@@ -44,7 +40,6 @@ pemetaan_kolom = {
     "remarks": "Remarks/Keterangan"
 }
 
-# Kolom akhir yang diinginkan
 kolom_akhir = [
     "id", "Nama", "Gender", "Alamat", "Kelurahan", "Kecamatan", "Kota/Kabupaten",
     "Propinsi", "No HP", "No Hp-2", "Sales Date", "Varian Motor", "Main Dealer",
@@ -56,7 +51,6 @@ kolom_akhir = [
     "Warna varian motor", "E-MAIL", "FACEBOOK", "INSTAGRAM", "TWITTER"
 ]
 
-# Pilih dan ganti nama kolom sesuai pemetaan
 try:
     df_pindah = df_filtered[list(pemetaan_kolom.keys())].rename(columns=pemetaan_kolom)
     df_pindah["No HP"] = df_pindah["No HP"].astype(str).apply(lambda x: "0" + x if not x.startswith("0") else x)
@@ -64,20 +58,17 @@ except:
     print("Failed to select and rename columns")
 
 try:
-    # Tambahkan kolom yang tidak ada di DataFrame asli dan isi dengan NaN
     for kolom in kolom_akhir:
         if kolom not in df_pindah.columns:
             df_pindah[kolom] = np.nan
-            
-    # Urutkan kolom sesuai dengan kolom_akhir       
+                
     df_pindah = df_pindah[kolom_akhir]
 except:
     print("Failed to add missing columns")
 
-# Construct the full file path and filename
+# file path 
 output_file_path = os.path.join(output_dir, f"DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx")
 
-# Save the resulting DataFrame to a new Excel file without formatting
 try:
     with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
         df_pindah = df_pindah.fillna('')
@@ -109,8 +100,6 @@ try:
 except Exception as e:
     print(f"Failed to save the output file: {e}")
 
-# Reformating extracted file
-
 file = f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx"
 try:
     extracted_file = pd.read_excel(file)
@@ -118,10 +107,8 @@ except Exception as e:
     print(f"Failed to read extracted file: {e}")
     exit()
 
-# Get unique values from the specified column
 unique_values = extracted_file["Main Dealer"].unique()
 
-# Loop through each unique value
 for unique in unique_values:
     if unique in ["PT MPM - MALANG", "PT MPM - SURABAYA"]:
         kolom_mpm = {

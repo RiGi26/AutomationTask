@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 import numpy as np
 
+
 # Path where folder has to change
 folder_date = "25"
 folder_month = "September"

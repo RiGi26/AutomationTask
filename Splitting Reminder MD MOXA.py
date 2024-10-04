@@ -23,7 +23,6 @@ filtered_data = filtered_data[
     (filtered_data["Dispatch Date"] <= pd.to_datetime("2024/09/25"))
 ]
 
-# Columns to include in output
 columns_to_include = [
     "id", "Nama", "Gender", "Alamat", "Kelurahan", "Kecamatan", "Kota/Kabupaten",
     "Propinsi", "No HP", "No Hp-2", "Sales Date", "Varian Motor", "Main Dealer",
@@ -36,9 +35,7 @@ columns_to_include = [
 ]
 final_data = filtered_data[columns_to_include]
 
-# Helper function to write Excel files with formatting
 def write_to_excel(dataframe, path):
-    # Replace NaN values with an empty string or another placeholder
     dataframe = dataframe.fillna('')
 
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -52,7 +49,7 @@ def write_to_excel(dataframe, path):
         for row_num in range(len(dataframe) + 1):
             for col_num, col in enumerate(dataframe.columns):
                 if row_num == 0:
-                    value = col  # Header
+                    value = col
                     worksheet.write(row_num, col_num, value, border_format)
                 else:
                     value = dataframe.iloc[row_num - 1, col_num]
@@ -62,8 +59,6 @@ def write_to_excel(dataframe, path):
                     else:
                         worksheet.write(row_num, col_num, value, border_format)
                 
-        
-        # Adjust column width
         for idx, col in enumerate(dataframe.columns):
             max_len = max(dataframe[col].astype(str).map(len).max(), len(col)) + 2
             worksheet.set_column(idx, idx, max_len)
@@ -88,11 +83,9 @@ def process_data_for_dealer(dealer_name, final_data):
     write_to_excel(df_final, output_path)
     print(f"File has been created for {dealer_name}")
 
-# Write the main filtered data to an Excel file
 main_output_path = os.path.join(output_dir, "Remainder Data Leads Master.xlsx")
 write_to_excel(final_data, main_output_path)
 
-# Process each unique dealer
 unique_dealers = final_data["Main Dealer"].unique()
 for dealer in unique_dealers:
     process_data_for_dealer(dealer, final_data)

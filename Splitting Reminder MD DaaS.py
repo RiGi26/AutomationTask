@@ -5,13 +5,8 @@ import numpy as np
 
 # setting
 pd.set_option("display.max_columns", None)
-
-# Path where folder has to change
 current_date = datetime.now().strftime("%Y%m%d")
-
-# Path where the output files will be saved
 output_dir = f"D:\\Daily MOXA\\Data Reminder DaaS"
-
 file = "D:\\Daily MOXA\\DAAS\\Rekap DAAS Februari 2023.xlsx"
 recap_data = pd.read_excel(file)
 
@@ -70,7 +65,6 @@ final_data.to_excel(output_path, index=False)
 
 unique_values = final_data["Main Dealer"].unique()
 
-# Column mappings and final column orders
 kolom_mpm = {
     "id": "id",
     "Nama": "Nama",
@@ -104,7 +98,6 @@ def process_data_for_dealer_DaaS(dealer_name, final_data):
     print(f"File has been created for {dealer_name} DaaS")
     
 def write_to_excel(dataframe, path):
-    # Replace NaN values with an empty string or another placeholder
     dataframe = dataframe.fillna('')
 
     with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
@@ -114,7 +107,6 @@ def write_to_excel(dataframe, path):
         border_format = workbook.add_format({"border": 1})
         date_format = workbook.add_format({'num_format':'dd-mm-yyyy', 'border': 1})
 
-        # Apply border and adjust column width
         for row_num in range(len(dataframe) + 1):
             for col_num, col in enumerate(dataframe.columns):
                 if row_num == 0:
@@ -128,8 +120,6 @@ def write_to_excel(dataframe, path):
                     else:
                         worksheet.write(row_num, col_num, value, border_format)
                 
-        
-        # Adjust column width
         for idx, col in enumerate(dataframe.columns):
             max_len = max(dataframe[col].astype(str).map(len).max(), len(col)) + 2
             worksheet.set_column(idx, idx, max_len)

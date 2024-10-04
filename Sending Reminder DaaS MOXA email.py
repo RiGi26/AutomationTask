@@ -34,9 +34,8 @@ overlapping_main_dealers = set(filtered_email_list['Main Dealer']).intersection(
 outlook = win32.Dispatch("outlook.application")
 
 def attach_files(mail, attachment_filenames):
-    # Attach files if they exist
     for filename, path_base in attachment_filenames:
-        if path_base:  # Ensure path_base is not None
+        if path_base:
             attachment_path = path_base / filename
             print(f"Checking for file: {attachment_path}")
             if attachment_path.exists():
@@ -45,14 +44,13 @@ def attach_files(mail, attachment_filenames):
                     mail.Attachments.Add(str(attachment_path))
                 except Exception as e:
                     print(f"Failed to attach {attachment_path}: {e}")
-                time.sleep(1)  # Add a short delay before attaching the next file
+                time.sleep(1)
             else:
                 print(f"Attachment not found: {attachment_path}")
         else:
             print(f"Invalid path base for attachment: {filename}")
 
 def send_email(row, main_dealer_name, project_type, base_path=None):
-    # Define email subject and attachment filenames
     if project_type == 'DaaS & MOXA':
         subject = f"Reminder Data Leads {main_dealer_name} (DaaS & MOXA)"
         attachment_filenames = [
@@ -62,11 +60,10 @@ def send_email(row, main_dealer_name, project_type, base_path=None):
     elif project_type == 'DaaS':
         subject = f"Reminder Data Leads {main_dealer_name} (DaaS)"
         attachment_filenames = [(f"Remainder Data Leads {main_dealer_name} DaaS.xlsx", base_path_DaaS)]
-    else:  # MOXA
+    else:
         subject = f"Reminder Data Leads {main_dealer_name} (MOXA)"
         attachment_filenames = [(f"Remainder Data Leads {main_dealer_name}.xlsx", base_path)]
     
-    # Create email
     mail = outlook.CreateItem(0)
     mail.To = row["to"]
     mail.CC = row["cc"]
