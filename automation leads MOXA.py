@@ -9,8 +9,8 @@ import re
 import time
 import win32com.client as win32
 
-folder_date = "28" # change
-folder_month = "Oktober"
+folder_date = "01" # change
+folder_month = "November"
 current_date = datetime.now().strftime("%Y%m%d")
 dispatch_date = datetime.now().strftime("%d/%m/%Y")
 filter_date = datetime.now().strftime("%d %B %Y")
@@ -24,13 +24,12 @@ path = Path("D:\\Daily MOXA\\Master Leads Interest 2024.xlsx")
 file = "D:\\Daily MOXA\\Automate Send to MD\\Email list.xlsx"
 file_DaaS = "D:\Daily MOXA\DAAS\Rekap DAAS Februari 2023.xlsx"
 path_folder = Path("D:\\Daily MOXA")
-data_recap = Path("D:\\Daily MOXA\\backup\\Leads FIFGROUP Compile all MD.xlsx")
-path_file = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\2024\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx")
+data_recap = Path("D:\\Daily MOXA\\Leads FIFGROUP Compile all MD.xlsx")
 output_file_path_recap = os.path.join(path_folder, "Leads FIFGROUP Compile all MD.xlsx")
 
 try:
     # data raw
-    master = pd.read_excel(path, sheet_name="Oktober")
+    master = pd.read_excel(path, sheet_name="November", parse_dates=['Tanggal Lahir'])
     email_list = pd.read_excel(file)
     dealer_DaaS = pd.read_excel(file_DaaS)
     
@@ -137,11 +136,11 @@ Riyadh Akhdan Syafi<br>
 """
     attach_files(mail, attachment_filenames)
 
-    # Display
-    mail.Display()
+    # # Display
+    # mail.Display()
 
-    # Sending
-    mail.Send()
+    # # Sending
+    # mail.Send()
 
 def extract_dealer_name(filename):
     match = re.search(r'FIFGROUP \d+ (.+)\.xlsx', filename)
@@ -335,19 +334,15 @@ try:
                                 continue
 except Exception as e :
     print(f"error occurs {e}")
-    
-try:
-    df_recap = pd.read_excel(data_recap)
-except Exception as e:
-    print("data error : {e}")
 
 # Membaca file Excel dan menggabungkannya
 try:
-    df_recap = pd.read_excel(data_recap)
-    df_daily = pd.read_excel(path_file)
+    df_recap = pd.read_excel(data_recap, parse_dates=['Tanggal Lahir'])
+    df_daily = pd.read_excel(path_file, parse_dates=['Tanggal Lahir'])
     df_daily['Source Leads'] = 'FIF'
     df_daily['Platform Data'] = 'MOXA'
-    id_daily = df_daily['id'].to_list()
+    filter_daily = df_daily[df_daily['Main Dealer'] != 'blacklist']
+    id_daily = filter_daily['id'].tolist()
     df_merge = pd.concat([df_recap, df_daily], axis=0)
     try:
         for column in column_date:
@@ -362,7 +357,7 @@ try:
 except Exception as e:
     print(f"error while running: {e}")
 
-# Menulis data ke Excel menggunakan pandas dan XlsxWriter
+#Menulis data ke Excel menggunakan pandas dan XlsxWriter
 try:
     with pd.ExcelWriter(output_file_path_recap, engine='xlsxwriter') as writer:
         df_merge.to_excel(writer, sheet_name="concate", index=False)
