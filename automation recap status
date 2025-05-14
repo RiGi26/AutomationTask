@@ -1,0 +1,107 @@
+import numpy as np
+import pandas as pd
+import os
+from pathlib import Path
+import logging
+import msoffcrypto
+from io import BytesIO
+
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 2000)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# path
+path_folder = Path("D:\\Daily MOXA")
+file_raw = Path(r"C:\Users\61140\Downloads\Template Moxa Konven dan Moxa Syariah (14 Mei 2025).xlsx") # change
+date = '14/05/2025'
+file_password = "202505"
+cols = ['Id User Profile', 'Id Leads Data User', 'hasil call 1', 'hasil call 2', 'hasil call 3', 'hasil call 1.1',
+        'hasil call 2.1', 'hasil call 3.1', 'hasil call 1.2', 'hasil call 2.2', 'hasil call 3.2']
+column = ['hasil call 1', 'hasil call 2', 'hasil call 3', 'hasil call 1.1', 'hasil call 2.1', 'hasil call 3.1',
+          'hasil call 1.2', 'hasil call 2.2', 'hasil call 3.2']
+file_moxa = Path(r"D:\Daily MOXA\Data Leads MOXA.xlsx")
+sheet_name = ['NMC', 'NMC SY']
+raw_name = ['Template Konven', 'Template Syariah']
+output_dir = os.path.join(path_folder, 'Data Leads MOXA.xlsx')
+
+all_data = {}
+try:
+    for sheet, raw in zip(sheet_name, raw_name):
+        print(f"Processing sheet: {sheet} with raw template: {raw}")
+
+        with open(file_raw, "rb") as f:
+            office_file = msoffcrypto.OfficeFile(f)
+            office_file.load_key(password=file_password)
+            decrypted = BytesIO()
+            office_file.decrypt(decrypted)
+
+        # read_excel dari decrypted buffer
+        decrypted.seek(0)  # Reset posisi pointer
+        read_moxa = pd.read_excel(decrypted, sheet_name=raw, engine='openpyxl')
+
+        moxa_filter = read_moxa[cols]
+        read_master_moxa = pd.read_excel(file_moxa, sheet_name=sheet)
+
+        # filter data tanggal aktual
+        filtering_today = read_moxa.copy()
+        if not pd.api.types.is_datetime64_any_dtype(filtering_today['tanggal penarikan']):
+            filtering_today['tanggal penarikan'] = pd.to_datetime(filtering_today['tanggal penarikan'],
+                                                                  format='%d/%m/%Y')
+
+        # target file
+        target_date = pd.to_datetime(date, format='%d/%m/%Y')
+        filtering_today = filtering_today[filtering_today['tanggal penarikan'] == target_date]
+        filtering_today = filtering_today.rename(
+            columns={'Transaction Date Time': 'Transaction', 'dihubungi ': 'dihubungi'})
+
+        clean_today = filtering_today.drop(columns=['Is Syariah', 'hasil call 2', 'hasil call 3', 'hasil call 2.1',
+                                                    'hasil call 3.1', 'hasil call 2.2', 'hasil call 3.2', 'CALL',
+                                                    'Unnamed: 65'], errors='ignore')
+
+        concate_data = pd.concat([read_master_moxa, clean_today])
+        concate_data['tanggal penarikan'] = pd.to_datetime(concate_data['tanggal penarikan'], format='%d/%m/%Y',
+                                                           errors='coerce')
+
+        logging.info(concate_data.tail(10))
+
+        # data moxa daily
+        df_replaced = read_moxa.copy()
+        df_replaced[column] = df_replaced[column].fillna('missing')
+        for col in column:
+            df_replaced[col] = df_replaced[col].astype(str).str.replace(r'\(DOUBLE\)', '', regex=True).str.strip()
+
+        df_replaced.loc[df_replaced['hasil call 3'] != 'missing', 'hasil call 2'] = df_replaced['hasil call 3']
+        df_replaced.loc[df_replaced['hasil call 2'] != 'missing', 'hasil call 1'] = df_replaced['hasil call 2']
+        df_replaced.loc[df_replaced['hasil call 3.1'] != 'missing', 'hasil call 2.1'] = df_replaced['hasil call 3.1']
+        df_replaced.loc[df_replaced['hasil call 2.1'] != 'missing', 'hasil call 1.1'] = df_replaced['hasil call 2.1']
+        df_replaced.loc[df_replaced['hasil call 3.2'] != 'missing', 'hasil call 2.2'] = df_replaced['hasil call 3.2']
+        df_replaced.loc[df_replaced['hasil call 2.2'] != 'missing', 'hasil call 1.2'] = df_replaced['hasil call 2.2']
+        df_replaced[column] = df_replaced[column].replace({'missing': np.nan})
+
+        logging.info("Processed data preview:")
+        logging.info(df_replaced[['Id User Profile', 'tanggal call 1', 'hasil call 1', 'hasil call 2', 'hasil call 3', 'hasil call 1.1', 'hasil call 2.1',
+                                  'hasil call 3.1', 'hasil call 1.2', 'hasil call 2.2', 'hasil call 3.2']].tail(100))
+
+        result_status = df_replaced[['Id User Profile', 'Id Leads Data User', 'tanggal call 1', 'hasil call 1', 'tanggal call 2',
+                                     'hasil call 1.1', 'tanggal call 3', 'hasil call 1.2']]
+
+
+        concate_data.set_index('Id Leads Data User', inplace=True)
+        result_status.set_index('Id Leads Data User', inplace=True)
+
+        concate_data.update(
+            result_status[['tanggal call 1', 'hasil call 1', 'tanggal call 2', 'hasil call 1.1', 'tanggal call 3', 'hasil call 1.2']])
+
+        concate_data['Phone'] = concate_data['Phone'].astype(str).apply(
+            lambda x: "0" + x if not x.startswith("0") else x)
+        concate_data['Nomor KTP'] = concate_data['Nomor KTP'].astype(str).fillna("")
+        all_data[sheet] = concate_data.reset_index()
+
+    with pd.ExcelWriter(output_dir, engine='xlsxwriter', datetime_format='dd/mm/yyyy') as writer:
+        for sheet, df in all_data.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
+
+except Exception as e:
+    logging.error(f"Error during processing: {e}")
