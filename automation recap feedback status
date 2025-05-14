@@ -1,0 +1,244 @@
+import pandas as pd
+import numpy as np
+from pathlib import Path
+import os
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Option
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 2000)
+
+# Source
+folder_year = "2025"  # Change
+folder_month = "Mei"  # Change
+base_path = Path(f"D:\\etc\\Cross Selling\\Moxa\\Booking\\{folder_year}\\{folder_month}")
+output_path = os.path.join(base_path, 'MOXA STATUS FEEDBACK 20250512.xlsx')  # Change
+
+# Ensure the output directory exists
+os.makedirs(base_path, exist_ok=True)
+
+# Path
+data_raw_moxa = Path("D:\\Daily MOXA\\Data Leads MOXA.xlsx")
+data_raw_dealer = Path("D:\\Daily MOXA\\Leads FIFGROUP Compile all MD v2.xlsx")
+data_dl = Path(r"D:\Report DL UFI\Mei\13\RPT_DIGITAL_LEADS_HO_2025_12Mei2025.xlsx")
+file_refi = Path(r"C:\Users\61140\Downloads\exportDanastra (10).xlsx")
+file_amitra = Path(r"C:\Users\61140\Downloads\exportDanastra (4).xlsx")
+column = ['hasil call 1', 'hasil call 1.1', 'hasil call 1.2']
+lobs = ['NMC', 'NMC SY']
+digit_colum = ['Phone', 'Phone (Optional)']
+
+# Read Dealer Data Once
+df_dealer = pd.read_excel(data_raw_dealer)
+
+# Processing `Group Status` for Blacklist
+df_dealer['Group Status'] = df_dealer.apply(
+    lambda row: f"{row['Group Status']}, blacklist" if pd.isna(row['Dispatch Date']) else row['Group Status'], axis=1
+)
+
+# Handling NaN values in `Group Status`
+df_dealer['Group Status'] = df_dealer['Group Status'].fillna('Belum ada feedback')
+
+# Concatenating Dealer Status
+df_dealer['Dealer Status'] = df_dealer[['Group Status', 'Progress FU', 'Prospect Pending']].fillna('').agg(' '.join,
+                                                                                                           axis=1)
+df_dealer = df_dealer[['Id Leads Data User', 'Dealer Status']]
+print(df_dealer.head())
+
+# Column mapping for the refi file
+Mapping_column = {
+    "Lead ID": "Id User Profile",
+    "Digital Lead Id": "Id Leads Data User",
+    "Fullname": "Name",
+    "Mobile Phone1": "Phone",
+    "No KTP": "Nomor KTP",
+    "Submit Date": "Transaction"
+}
+
+mapping_status = {
+    "NOT ANSWERED": "Unreachable",
+    "NOT INTERESTED": "Canceled",
+    "INPROGRESS": "In Progress",
+    "INTERESTED": "In Progress"
+}
+
+Mapping_column_amitra = {
+    "Lead ID": "Id User Profile",
+    "Digital Lead Id": "Id Leads Data User",
+    "Fullname": "Name",
+    "Mobile Phone1": "Phone",
+    "No KTP": "Nomor KTP",
+    "Submit Date": "Transaction"
+    }
+
+try:
+    with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+        for lob in lobs:
+            try:
+                df = pd.read_excel(data_raw_moxa, sheet_name=lob)
+                df['Transaction'] = pd.to_datetime(df['Transaction'], errors='coerce')
+                df = df[(df['Transaction'] >= '2025-05-01') & (df['Transaction'] < '2025-05-13')]  # Change
+                df[column] = df[column].apply(lambda x: x.str.upper())
+
+                for col in ['Phone', 'Nomor KTP']:
+                    try:
+                        df[col] = df[col].astype(str)
+                        logging.info(f"Perubahan type object pada {col} berhasil")
+                    except Exception as e:
+                        logging.error(f"Error converting {col} to object: {e}")
+
+                try:
+                    df['Nomor KTP'] = df['Nomor KTP'].apply(lambda x: x if x else "")
+                    logging.info("Edit KTP berhasil")
+                except Exception as e:
+                    logging.error(e)
+
+                try:
+                    df['Phone'] = df['Phone'].apply(lambda x: "0" + x if not x.startswith("0") else x)
+                except Exception as e:
+                    logging.error(e)
+
+                logging.info(df.dtypes)
+                logging.info(df.head(10))
+
+            except Exception as e:
+                logging.error(f"Error reading {lob}: {e}")
+
+            # Data Cleaning
+            try:
+                df_replaced = df.copy()
+                for col in column:
+                    df_replaced[col] = df_replaced[col].str.replace(r'\(DOUBLE\)', '', regex=True).str.strip()
+                df_replaced.loc[df_replaced['hasil call 1.2'].notna(), 'hasil call 1.1'] = df_replaced['hasil call 1.2']
+                df_replaced.loc[df_replaced['hasil call 1.1'].notna(), 'hasil call 1'] = df_replaced['hasil call 1.1']
+                df_replaced.loc[df_replaced['hasil call 1'].notna(), 'Detail'] = df_replaced['hasil call 1']
+            except Exception as e:
+                logging.error(f"Error at {col}: {e} {lob}")
+
+            # Standardizing `Detail`
+            df_replaced['Detail'] = df_replaced['Detail'].replace({
+                'CUTSTOMER HANYA COBA-COBA': 'CUSTOMER HANYA COBA-COBA',
+                'INTERST': 'INTEREST',
+                'INTERETS': 'INTEREST',
+                'INTREST': 'INTEREST',
+                'CNC, TERHUBUNG\xa0DENGAN ADIK YBS': 'CNC, TERHUBUNG DENGAN KELUARGA YBS',
+                'NO  ANSWER': 'NO ANSWER'
+            }, regex=True)
+
+            # Mapping Status
+            status_mapping = {
+                'CUSTOMER HANYA COBA-COBA': 'Canceled',
+                'INTEREST': 'In Progress',
+                'NO ANSWER': 'Unreachable',
+                'LINE BUSY': 'Unreachable',
+                'NOT ACTIVE': 'Unreachable',
+                'CALL AGAIN, DIHUBUNGI KEMBALI': 'Unreachable',
+                'CNC, TERHUBUNG DENGAN KELUARGA YBS': 'Unreachable'
+            }
+            df_replaced['Status'] = df_replaced['Detail'].map(status_mapping).fillna(df_replaced['Status'])
+
+            # Drop Unnecessary Columns (Only If They Exist)
+            cols_to_drop = ['kelurahan', 'dihubungi', 'melalui media', 'tanggal penarikan', 'tanggal call 1',
+                            'hasil call 1', 'tanggal call 2', 'hasil call 1.1', 'tanggal call 3', 'hasil call 1.2']
+            df_final = df_replaced.drop(columns=[col for col in cols_to_drop if col in df_replaced.columns])
+
+            # Capitalize Detail
+            df_final['Detail'] = df_final['Detail'].apply(lambda x: x.title() if isinstance(x, str) else x)
+
+            # Merge with Dealer Data
+            df_finalizing = df_final.merge(df_dealer, on='Id Leads Data User', how='left')
+            logging.info(df_finalizing.head(15))
+
+            # Save Each LOB into a Separate Sheet
+            df_finalizing['LOB'] = lob
+            df_finalizing.to_excel(writer, sheet_name=lob, index=False)
+
+        # Generate REFI sheet
+        try:
+            df_refi = pd.read_excel(file_refi)
+            df_refi = df_refi[list(Mapping_column.keys())].rename(columns=Mapping_column)
+
+            if "Transaction" in df_refi.columns:
+                df_refi["Transaction"] = pd.to_datetime(df_refi["Transaction"], errors="coerce")
+
+            if "Phone" in df_refi.columns:
+                df_refi["Phone"] = (
+                    df_refi["Phone"]
+                    .astype(str)
+                    .apply(lambda x: "0" + x if not x.startswith("0") else x)
+                )
+
+            if "Nomor KTP" in df_refi.columns:
+                df_refi["Nomor KTP"] = df_refi["Nomor KTP"].astype(str).fillna("")
+
+            df_refi = df_refi.drop_duplicates(
+                subset=["Id Leads Data User", "Phone", "Nomor KTP"]
+            )
+
+            df_dl = pd.read_excel(data_dl)
+            df_final_refi = pd.merge(df_dl, df_refi, left_on='Lead ID', right_on='Id User Profile')
+            df_fix_refi = df_final_refi[['Id User Profile', 'Id Leads Data User', 'Name',	'Phone', 'Nomor KTP', 'Transaction', 'Status E-Form Customer', 'Status FM Connect / FM Sales']].copy()
+            df_fix_refi['Status'] = ''
+            df_fix_refi['Detail'] = df_fix_refi['Status FM Connect / FM Sales']
+            df_fix_refi['Status E-Form Customer'] = df_fix_refi['Status E-Form Customer'].fillna('INPROGRESS')
+            df_fix_refi['Status'] = df_fix_refi['Status E-Form Customer'].map(mapping_status)
+
+            df_fix_refi['Status'] = df_fix_refi.apply(
+                lambda row: 'Canceled' if row['Status E-Form Customer'] == 'INTERESTED' and row[
+                    'Status FM Connect / FM Sales'] == 'NOT INTEREST' else row['Status'],
+                axis=1
+            )
+            df_fix_refi = df_fix_refi.drop(columns='Status FM Connect / FM Sales')
+            df_fix_refi['LOB'] = 'REFI'
+            df_fix_refi.to_excel(writer, sheet_name="REFI", index=False)
+            logging.info(f"File berhasil disimpan: {output_path}")
+        except Exception as e:
+            logging.error(f"Error while generating REFI sheet: {e}")
+
+        # if os.path.exists(file_amitra):
+        #     try:
+        #         df_amitra = pd.read_excel(file_amitra)
+        #         df_amitra = df_amitra[list(Mapping_column_amitra.keys())].rename(columns=Mapping_column_amitra)
+        #
+        #         if "Transaction" in df_amitra.columns:
+        #             df_amitra["Transaction"] = pd.to_datetime(df_amitra["Transaction"], errors="coerce")
+        #
+        #         if "Phone" in df_amitra.columns:
+        #             df_amitra["Phone"] = (
+        #                 df_amitra["Phone"]
+        #                 .astype(str)
+        #                 .apply(lambda x: "0" + x if not x.startswith("0") else x)
+        #             )
+        #
+        #         if "Nomor KTP" in df_amitra.columns:
+        #             df_amitra["Nomor KTP"] = df_amitra["Nomor KTP"].astype(str).fillna("")
+        #
+        #         df_amitra = df_amitra.drop_duplicates(
+        #             subset=["Id Leads Data User", "Phone", "Nomor KTP"]
+        #         )
+        #         df_dl = pd.read_excel(data_dl)
+        #         df_final_amitra = pd.merge(df_dl, df_amitra, left_on='Lead ID', right_on='Id User Profile')
+        #         df_fix_amitra = df_final_amitra[['Id User Profile', 'Id Leads Data User', 'Name', 'Phone', 'Nomor KTP', 'Transaction',
+        #                            'Status E-Form Customer', 'Status FM Connect / FM Sales']].copy()
+        #         df_fix_amitra['Status'] = ''
+        #         df_fix_amitra['Detail'] = df_fix_amitra['Status FM Connect / FM Sales']
+        #         df_fix_amitra['Status E-Form Customer'] = df_fix_amitra['Status E-Form Customer'].fillna('INPROGRESS')
+        #         df_fix_amitra['Status'] = df_fix_amitra['Status E-Form Customer'].map(mapping_status)
+        #
+        #         df_fix_amitra['Status'] = df_fix_amitra.apply(
+        #             lambda row: 'Canceled' if row['Status E-Form Customer'] == 'INTERESTED' and row[
+        #                 'Status FM Connect / FM Sales'] == 'NOT INTEREST' else row['Status'],
+        #             axis=1
+        #         )
+        #         df_fix_amitra = df_fix_amitra.drop(columns='Status FM Connect / FM Sales')
+        #         df_fix_amitra['LOB'] = 'AMITRA'
+        #         df_fix_amitra.to_excel(writer, sheet_name="AMITRA", index=False)
+        #     except Exception as e:
+        #         logging.error(f"Error while generating REFI sheet: {e}")
+        # else:
+        #     print("amitra file doesn't exist")
+
+except Exception as e:
+    logging.error(f"Error while processing data: {e}")
