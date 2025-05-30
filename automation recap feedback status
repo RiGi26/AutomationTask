@@ -1,71 +1,310 @@
-import logging
-import os
-from io import BytesIO
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
-
-import msoffcrypto
-import numpy as np
 import pandas as pd
+import numpy as np
+from pathlib import Path
+import os
+import logging
+from typing import Dict, List, Optional, Tuple, Union, Any
+from dataclasses import dataclass
+from datetime import datetime
+import re
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 
 
 @dataclass
-class ProcessingConfig:
-    """Configuration class for MOXA data processing"""
-    path_folder: Path = Path("D:\\Daily MOXA")
-    file_raw: Path = Path(r"D:\Daily MOXA\Leads MOXA\Template Moxa Konven dan Moxa Syariah (30 Mei 2025).xlsx")
-    date: str = '30/05/2025'
-    file_password: str = "202505"
-    file_moxa: Path = Path(r"D:\Daily MOXA\Data Leads MOXA.xlsx")
-    output_filename: str = 'Data Leads MOXA.xlsx'
+class StatusProcessorConfig:
+    """Configuration class for MOXA Status Feedback processing"""
+    # Date and folder configuration
+    folder_year: str = "2025"
+    folder_month: str = "Mei"
+    first_date: str = '2025-05-01'
+    second_date: str = '2025-05-25'
+    output_filename: str = 'MOXA STATUS FEEDBACK 20250525.xlsx'
 
-    # Column definitions
-    required_cols: List[str] = None
-    call_result_columns: List[str] = None
-    update_columns: List[str] = None
-    sheet_names: List[str] = None
-    raw_names: List[str] = None
+    # File paths
+    data_raw_moxa: Path = Path("D:\\Daily MOXA\\Data Leads MOXA.xlsx")
+    data_raw_dealer: Path = Path("D:\\Daily MOXA\\Leads FIFGROUP Compile all MD v2.xlsx")
+    data_dl: Path = Path(r"D:\Report DL UFI\Mei\26\RPT_DIGITAL_LEADS_HO_2025.xls.xlsx")
+    file_refi: Path = Path(r"C:\Users\61140\Downloads\exportDanastra (14).xlsx")
+    file_amitra: Path = Path(r"C:\Users\61140\Downloads\Export AMITRA (3).xlsx")
+
+    # Processing configuration
+    call_columns: List[str] = None
+    lobs: List[str] = None
+    digit_columns: List[str] = None
+
+    # Excel formatting configuration
+    autofit_enabled: bool = True
+    min_column_width: int = 8
+    max_column_width: int = 50
+    column_padding: int = 2
 
     def __post_init__(self):
-        """Initialize column lists if not provided"""
-        if self.required_cols is None:
-            self.required_cols = [
-                'Id User Profile', 'Id Leads Data User', 'hasil call 1', 'hasil call 2',
-                'hasil call 3', 'hasil call 1.1', 'hasil call 2.1', 'hasil call 3.1',
-                'hasil call 1.2', 'hasil call 2.2', 'hasil call 3.2'
-            ]
+        """Initialize default values if not provided"""
+        if self.call_columns is None:
+            self.call_columns = ['hasil call 1', 'hasil call 1.1', 'hasil call 1.2']
 
-        if self.call_result_columns is None:
-            self.call_result_columns = [
-                'hasil call 1', 'hasil call 2', 'hasil call 3', 'hasil call 1.1',
-                'hasil call 2.1', 'hasil call 3.1', 'hasil call 1.2', 'hasil call 2.2',
-                'hasil call 3.2'
-            ]
+        if self.lobs is None:
+            self.lobs = ['NMC', 'NMC SY']
 
-        if self.update_columns is None:
-            self.update_columns = [
-                'tanggal call 1', 'hasil call 1', 'tanggal call 2', 'hasil call 1.1',
-                'tanggal call 3', 'hasil call 1.2'
-            ]
+        if self.digit_columns is None:
+            self.digit_columns = ['Phone', 'Phone (Optional)', 'Nomor KTP', 'Id Leads Data User', 'Id User Profile']
 
-        if self.sheet_names is None:
-            self.sheet_names = ['NMC', 'NMC SY']
+    @property
+    def base_path(self) -> Path:
+        """Get the base output path"""
+        return Path(f"D:\\etc\\Cross Selling\\Moxa\\Booking\\{self.folder_year}\\{self.folder_month}")
 
-        if self.raw_names is None:
-            self.raw_names = ['Template Konven', 'Template Syariah']
+    @property
+    def output_path(self) -> Path:
+        """Get the full output file path"""
+        return self.base_path / self.output_filename
 
 
-class MOXADataProcessor:
-    """Enhanced MOXA Data Processor with improved structure and error handling"""
+class ExcelFormatter:
+    """Handles Excel formatting operations"""
 
-    def __init__(self, config: Optional[ProcessingConfig] = None):
-        self.config = config or ProcessingConfig()
+    def __init__(self, min_width: int = 8, max_width: int = 50, padding: int = 2):
+        self.min_width = min_width
+        self.max_width = max_width
+        self.padding = padding
+
+    def autofit_columns(self, worksheet) -> None:
+        """Adjust column widths automatically based on content"""
+        for column in worksheet.columns:
+            max_length = self._get_max_column_length(column)
+            column_letter = get_column_letter(column[0].column)
+            adjusted_width = self._calculate_width(max_length)
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+
+    def _get_max_column_length(self, column) -> int:
+        """Get maximum text length in a column"""
+        max_length = 0
+        for cell in column:
+            try:
+                if cell.value is not None:
+                    cell_length = len(str(cell.value))
+                    if cell_length > max_length:
+                        max_length = cell_length
+            except Exception:
+                continue
+        return max_length
+
+    def _calculate_width(self, length: int) -> int:
+        """Calculate adjusted width with bounds checking"""
+        adjusted_width = length + self.padding
+        return max(self.min_width, min(adjusted_width, self.max_width))
+
+
+class NumericValidator:
+    """
+    Kelas untuk validasi dan penanganan data numerik panjang
+    yang sering bermasalah di Excel
+    """
+
+    def __init__(self):
+        self.validation_results = []
+
+    def validate_long_number(self, value: Union[str, int, float]) -> Dict[str, Any]:
+        """
+        Validasi angka panjang dan deteksi masalah format
+
+        Args:
+            value: Nilai yang akan divalidasi
+
+        Returns:
+            Dict dengan informasi validasi
+        """
+        result = {
+            'original_value': value,
+            'value_type': type(value).__name__,
+            'is_valid': True,
+            'issues': [],
+            'corrected_value': None,
+            'suggestions': []
+        }
+
+        # Skip jika nilai kosong atau NaN
+        if pd.isna(value) or value == '' or value == 'nan':
+            return result
+
+        # Konversi ke string untuk analisis
+        str_value = str(value)
+
+        # Cek apakah ada decimal point yang tidak seharusnya
+        if str_value.endswith('.0'):
+            result['issues'].append('Decimal point tidak diperlukan')
+            result['corrected_value'] = str_value.replace('.0', '')
+            result['suggestions'].append('Hapus .0 di akhir')
+
+        # Cek panjang angka
+        clean_number = str_value.replace('.0', '').replace('.', '')
+        if len(clean_number) > 15:
+            result['issues'].append(f'Angka terlalu panjang ({len(clean_number)} digit)')
+            result['suggestions'].append('Simpan sebagai text untuk mencegah kehilangan presisi')
+
+        # Cek apakah mirip dengan format tertentu
+        if len(clean_number) == 16:
+            result['suggestions'].append('Kemungkinan NIK - format sebagai text')
+        elif len(clean_number) >= 10 and len(clean_number) <= 15:
+            result['suggestions'].append('Kemungkinan nomor telepon/rekening - format sebagai text')
+
+        # Cek scientific notation
+        if 'e' in str_value.lower() or '+' in str_value:
+            result['issues'].append('Dalam format scientific notation')
+            result['suggestions'].append('Konversi kembali ke format normal')
+
+        if result['issues']:
+            result['is_valid'] = False
+
+        return result
+
+    def fix_excel_number_format(self, value: Union[str, int, float]) -> str:
+        """
+        Perbaiki format angka yang rusak dari Excel
+
+        Args:
+            value: Nilai yang akan diperbaiki
+
+        Returns:
+            String nilai yang sudah diperbaiki
+        """
+        if pd.isna(value) or value == '' or value == 'nan':
+            return ''
+
+        str_value = str(value)
+
+        # Hapus .0 di akhir jika ada
+        if str_value.endswith('.0'):
+            str_value = str_value[:-2]
+
+        # Konversi scientific notation ke normal
+        if 'e' in str_value.lower():
+            try:
+                # Konversi ke float lalu ke int untuk menghilangkan scientific notation
+                float_val = float(str_value)
+                if float_val.is_integer():
+                    str_value = str(int(float_val))
+                else:
+                    str_value = str(float_val)
+            except ValueError:
+                pass
+
+        return str_value
+
+    def validate_dataframe_column(self, df: pd.DataFrame, column_name: str) -> Dict[str, Any]:
+        """
+        Validasi seluruh kolom dalam DataFrame
+
+        Args:
+            df: DataFrame pandas
+            column_name: Nama kolom yang akan divalidasi
+
+        Returns:
+            Dict dengan ringkasan validasi kolom
+        """
+        if column_name not in df.columns:
+            return {'error': f'Kolom {column_name} tidak ditemukan'}
+
+        column_data = df[column_name]
+        results = {
+            'column_name': column_name,
+            'total_rows': len(column_data),
+            'issues_found': 0,
+            'detailed_results': [],
+            'summary': {
+                'decimal_issues': 0,
+                'too_long': 0,
+                'scientific_notation': 0
+            }
+        }
+
+        for idx, value in enumerate(column_data):
+            if pd.isna(value):
+                continue
+
+            validation = self.validate_long_number(value)
+            if not validation['is_valid']:
+                results['issues_found'] += 1
+                validation['row_index'] = idx
+                results['detailed_results'].append(validation)
+
+                # Update summary
+                for issue in validation['issues']:
+                    if 'Decimal point' in issue:
+                        results['summary']['decimal_issues'] += 1
+                    elif 'terlalu panjang' in issue:
+                        results['summary']['too_long'] += 1
+                    elif 'scientific notation' in issue:
+                        results['summary']['scientific_notation'] += 1
+
+        return results
+
+
+class MOXAStatusProcessor:
+    """Enhanced MOXA Status Feedback Processor with Excel Formatting"""
+
+    def __init__(self, config: Optional[StatusProcessorConfig] = None):
+        self.config = config or StatusProcessorConfig()
         self.logger = self._setup_logging()
+
+        # Initialize validators and formatters
+        self.numeric_validator = NumericValidator()
+        self.excel_formatter = ExcelFormatter(
+            min_width=self.config.min_column_width,
+            max_width=self.config.max_column_width,
+            padding=self.config.column_padding
+        )
+
+        # Column mappings (unchanged from original)
+        self.refi_column_mapping = {
+            "Lead ID": "Id User Profile",
+            "Digital Lead Id": "Id Leads Data User",
+            "Fullname": "Name",
+            "Mobile Phone1": "Phone",
+            "No KTP": "Nomor KTP",
+            "Submit Date": "Transaction"
+        }
+
+        self.amitra_column_mapping = {
+            "Lead ID": "Id User Profile",
+            "Digital Lead Id": "Id Leads Data User",
+            "Nama Lengkap": "Name",
+            "Nomor HP": "Phone",
+            "Nomor KTP": "Nomor KTP",
+            "Submit Date": "Transaction"
+        }
+
+        self.status_mapping = {
+            "NOT ANSWERED": "Unreachable",
+            "NOT INTERESTED": "Canceled",
+            "INPROGRESS": "In Progress",
+            "INTERESTED": "In Progress"
+        }
+
+        self.detail_status_mapping = {
+            'CUSTOMER HANYA COBA-COBA': 'Canceled',
+            'INTEREST': 'In Progress',
+            'NO ANSWER': 'Unreachable',
+            'LINE BUSY': 'Unreachable',
+            'NOT ACTIVE': 'Unreachable',
+            'CALL AGAIN, DIHUBUNGI KEMBALI': 'Unreachable',
+            'CNC, TERHUBUNG DENGAN KELUARGA YBS': 'Unreachable'
+        }
+
+        self.detail_replacements = {
+            'CUTSTOMER HANYA COBA-COBA': 'CUSTOMER HANYA COBA-COBA',
+            'INTERST': 'INTEREST',
+            'INTERETS': 'INTEREST',
+            'INTREST': 'INTEREST',
+            'CNC, TERHUBUNG\xa0DENGAN ADIK YBS': 'CNC, TERHUBUNG DENGAN KELUARGA YBS',
+            'NO  ANSWER': 'NO ANSWER'
+        }
+
         self._validate_configuration()
 
     def _setup_logging(self) -> logging.Logger:
-        """Configure logging with proper formatting"""
+        """Setup logging configuration"""
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -73,348 +312,434 @@ class MOXADataProcessor:
         return logging.getLogger(__name__)
 
     def _validate_configuration(self) -> None:
-        """Validate configuration and file existence"""
+        """Validate configuration and create necessary directories"""
         try:
-            if not self.config.file_raw.exists():
-                raise FileNotFoundError(f"Raw data file not found: {self.config.file_raw}")
+            # Create output directory
+            os.makedirs(self.config.base_path, exist_ok=True)
+            self.logger.info(f"Output directory ready: {self.config.base_path}")
 
-            if not self.config.file_moxa.exists():
-                raise FileNotFoundError(f"Master MOXA file not found: {self.config.file_moxa}")
+            # Validate required files exist
+            required_files = [
+                self.config.data_raw_moxa,
+                self.config.data_raw_dealer,
+                self.config.data_dl
+            ]
 
-            if not self.config.path_folder.exists():
-                self.config.path_folder.mkdir(parents=True, exist_ok=True)
-                self.logger.info(f"Created output directory: {self.config.path_folder}")
+            for file_path in required_files:
+                if not file_path.exists():
+                    self.logger.warning(f"Required file not found: {file_path}")
+
+            # Set pandas options
+            pd.set_option('display.max_columns', None)
+            pd.set_option('display.width', 2000)
 
         except Exception as e:
             self.logger.error(f"Configuration validation failed: {e}")
             raise
 
-    def decrypt_excel_file(self, file_path: Path, password: str) -> BytesIO:
-        """Decrypt password-protected Excel file"""
+    def set_excel_formatting_params(self, min_width: int = None, max_width: int = None,
+                                    padding: int = None) -> 'MOXAStatusProcessor':
+        """Update Excel formatting parameters"""
+        if min_width is not None:
+            self.excel_formatter.min_width = min_width
+        if max_width is not None:
+            self.excel_formatter.max_width = max_width
+        if padding is not None:
+            self.excel_formatter.padding = padding
+        return self
+
+    # [Previous methods remain the same until export_to_excel]
+    # ... (load_and_process_dealer_data, standardize_phone_and_ktp, etc.)
+
+    def load_and_process_dealer_data(self) -> pd.DataFrame:
+        """Load and process dealer data"""
         try:
-            with open(file_path, "rb") as f:
-                office_file = msoffcrypto.OfficeFile(f)
-                office_file.load_key(password=password)
-                decrypted = BytesIO()
-                office_file.decrypt(decrypted)
-                decrypted.seek(0)
-                return decrypted
+            self.logger.info("Loading dealer data...")
+            df_dealer = pd.read_excel(self.config.data_raw_dealer)
+
+            # Validate numeric columns
+            if 'Id Leads Data User' in df_dealer.columns:
+                self.logger.info("Validating Id Leads Data User in dealer data...")
+                validation_result = self.numeric_validator.validate_dataframe_column(
+                    df_dealer, 'Id Leads Data User'
+                )
+                if validation_result['issues_found'] > 0:
+                    self.logger.warning(
+                        f"Found {validation_result['issues_found']} numeric issues in dealer Id Leads Data User")
+                    df_dealer['Id Leads Data User'] = df_dealer['Id Leads Data User'].apply(
+                        self.numeric_validator.fix_excel_number_format
+                    )
+
+            # Process Group Status for Blacklist
+            df_dealer['Group Status'] = df_dealer.apply(
+                lambda row: f"{row['Group Status']}, blacklist"
+                if pd.isna(row['Dispatch Date'])
+                else row['Group Status'],
+                axis=1
+            )
+
+            df_dealer['Group Status'] = df_dealer['Group Status'].fillna('Belum ada feedback')
+
+            # Concatenate Dealer Status
+            df_dealer['Dealer Status'] = df_dealer[
+                ['Group Status', 'Progress FU', 'Prospect Pending']
+            ].fillna('').agg(' '.join, axis=1)
+
+            df_dealer = df_dealer[['Id Leads Data User', 'Dealer Status']]
+
+            self.logger.info(f"Dealer data processed: {len(df_dealer)} records")
+            return df_dealer
+
         except Exception as e:
-            self.logger.error(f"Failed to decrypt file {file_path}: {e}")
+            self.logger.error(f"Failed to process dealer data: {e}")
             raise
 
-    def load_sheet_data(self, decrypted_file: BytesIO, sheet_name: str) -> pd.DataFrame:
-        """Load data from decrypted Excel file"""
+    def standardize_phone_and_ktp(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize phone numbers and KTP"""
         try:
-            df = pd.read_excel(decrypted_file, sheet_name=sheet_name, engine='openpyxl')
-            self.logger.info(f"Loaded {len(df)} rows from sheet '{sheet_name}'")
-            return df
-        except Exception as e:
-            self.logger.error(f"Failed to load sheet '{sheet_name}': {e}")
-            raise
+            for col in ['Phone', 'Nomor KTP']:
+                if col in df.columns:
+                    # Validate numeric format
+                    self.logger.info(f"Validating numeric format for {col}...")
+                    validation_result = self.numeric_validator.validate_dataframe_column(df, col)
 
-    def filter_by_date(self, df: pd.DataFrame, target_date: str) -> pd.DataFrame:
-        """Filter data by target date"""
-        try:
-            # Ensure date column is datetime
-            if not pd.api.types.is_datetime64_any_dtype(df['tanggal penarikan']):
-                df['tanggal penarikan'] = pd.to_datetime(
-                    df['tanggal penarikan'],
-                    format='%d/%m/%Y',
-                    errors='coerce'
+                    if validation_result['issues_found'] > 0:
+                        self.logger.warning(f"Found {validation_result['issues_found']} format issues in {col}")
+                        df[col] = df[col].apply(self.numeric_validator.fix_excel_number_format)
+
+                    # Convert to string
+                    df[col] = df[col].astype(str)
+                    self.logger.info(f"Converted {col} to string type")
+
+            # Handle KTP
+            if 'Nomor KTP' in df.columns:
+                df['Nomor KTP'] = df['Nomor KTP'].apply(lambda x: x if x and x != 'nan' else "")
+
+            # Handle Phone
+            if 'Phone' in df.columns:
+                df['Phone'] = df['Phone'].apply(
+                    lambda x: "0" + x if x and x != 'nan' and not x.startswith("0") else x
                 )
 
-            target_dt = pd.to_datetime(target_date, format='%d/%m/%Y')
-            filtered_df = df[df['tanggal penarikan'] == target_dt].copy()
-
-            self.logger.info(f"Filtered to {len(filtered_df)} rows for date {target_date}")
-            return filtered_df
-
-        except Exception as e:
-            self.logger.error(f"Date filtering failed: {e}")
-            raise
-
-    def clean_today_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Clean and prepare today's data"""
-        try:
-            # Rename columns
-            df = df.rename(columns={
-                'Transaction Date Time': 'Transaction',
-                'dihubungi ': 'dihubungi'
-            })
-
-            # Drop unnecessary columns
-            columns_to_drop = [
-                'Is Syariah', 'hasil call 2', 'hasil call 3', 'hasil call 2.1',
-                'hasil call 3.1', 'hasil call 2.2', 'hasil call 3.2', 'CALL',
-                'Unnamed: 65'
-            ]
-
-            df = df.drop(columns=columns_to_drop, errors='ignore')
-            self.logger.info(f"Cleaned data: {len(df)} rows, {len(df.columns)} columns")
             return df
 
         except Exception as e:
-            self.logger.error(f"Data cleaning failed: {e}")
+            self.logger.error(f"Phone/KTP standardization failed: {e}")
             raise
 
-    def process_call_results(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Process and cascade call results"""
+    def clean_call_results(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Clean and process call results"""
         try:
-            df_processed = df.copy()
+            df_cleaned = df.copy()
 
-            # Fill NaN values and clean data
-            df_processed[self.config.call_result_columns] = df_processed[self.config.call_result_columns].fillna(
-                'missing')
+            # Convert to uppercase
+            df_cleaned[self.config.call_columns] = df_cleaned[self.config.call_columns].apply(
+                lambda x: x.str.upper() if x.dtype == 'object' else x
+            )
 
-            for col in self.config.call_result_columns:
-                df_processed[col] = (
-                    df_processed[col]
-                    .astype(str)
-                    .str.replace(r'\(DOUBLE\)', '', regex=True)
-                    .str.strip()
-                )
+            # Remove (DOUBLE) pattern
+            for col in self.config.call_columns:
+                if col in df_cleaned.columns:
+                    df_cleaned[col] = df_cleaned[col].str.replace(r'\(DOUBLE\)', '', regex=True).str.strip()
 
             # Apply cascading logic
-            cascade_rules = [
-                ('hasil call 3', 'hasil call 2'),
-                ('hasil call 2', 'hasil call 1'),
-                ('hasil call 3.1', 'hasil call 2.1'),
-                ('hasil call 2.1', 'hasil call 1.1'),
-                ('hasil call 3.2', 'hasil call 2.2'),
-                ('hasil call 2.2', 'hasil call 1.2')
-            ]
+            if all(col in df_cleaned.columns for col in ['hasil call 1.2', 'hasil call 1.1', 'hasil call 1']):
+                df_cleaned.loc[df_cleaned['hasil call 1.2'].notna(), 'hasil call 1.1'] = df_cleaned['hasil call 1.2']
+                df_cleaned.loc[df_cleaned['hasil call 1.1'].notna(), 'hasil call 1'] = df_cleaned['hasil call 1.1']
+                df_cleaned.loc[df_cleaned['hasil call 1'].notna(), 'Detail'] = df_cleaned['hasil call 1']
 
-            for source, target in cascade_rules:
-                mask = df_processed[source] != 'missing'
-                df_processed.loc[mask, target] = df_processed.loc[mask, source]
-
-            # Replace 'missing' back to NaN
-            df_processed[self.config.call_result_columns] = df_processed[self.config.call_result_columns].replace(
-                {'missing': np.nan})
-
-            self.logger.info("Call results processing completed")
-            return df_processed
+            return df_cleaned
 
         except Exception as e:
-            self.logger.error(f"Call results processing failed: {e}")
+            self.logger.error(f"Call results cleaning failed: {e}")
             raise
 
-    def handle_duplicates(self, df: pd.DataFrame, id_column: str = 'Id Leads Data User') -> pd.DataFrame:
-        """Handle duplicate records in DataFrame"""
+    def standardize_detail_and_status(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize detail text and map status"""
         try:
-            duplicate_count = df[id_column].duplicated().sum()
-
-            if duplicate_count > 0:
-                self.logger.warning(f"Found {duplicate_count} duplicates in {id_column}, removing...")
-                df = df.drop_duplicates(subset=id_column, keep='last')
-                self.logger.info(f"After deduplication: {len(df)} rows remaining")
+            if 'Detail' in df.columns:
+                df['Detail'] = df['Detail'].replace(self.detail_replacements, regex=True)
+                df['Status'] = df['Detail'].map(self.detail_status_mapping).fillna(df.get('Status', ''))
+                df['Detail'] = df['Detail'].apply(lambda x: x.title() if isinstance(x, str) else x)
 
             return df
 
         except Exception as e:
-            self.logger.error(f"Duplicate handling failed: {e}")
+            self.logger.error(f"Detail/Status standardization failed: {e}")
             raise
 
-    def merge_and_update_data(self, master_df: pd.DataFrame, update_df: pd.DataFrame) -> pd.DataFrame:
-        """Merge master data with updates using robust approach"""
+    def process_lob_data(self, lob: str, df_dealer: pd.DataFrame) -> pd.DataFrame:
+        """Process data for a specific LOB"""
         try:
-            # Handle duplicates
-            master_df = self.handle_duplicates(master_df)
-            update_df = self.handle_duplicates(update_df)
+            self.logger.info(f"Processing LOB: {lob}")
 
-            # Create update mapping
-            update_data = update_df[['Id Leads Data User'] + self.config.update_columns].set_index('Id Leads Data User')
+            df = pd.read_excel(self.config.data_raw_moxa, sheet_name=lob)
 
-            # Merge data
-            merged_df = master_df.merge(
-                update_data,
-                left_on='Id Leads Data User',
-                right_index=True,
-                how='left',
-                suffixes=('', '_update')
-            )
+            # Validate numeric columns
+            self.logger.info(f"Validating numeric columns for LOB {lob}...")
+            for col in self.config.digit_columns:
+                if col in df.columns:
+                    validation_result = self.numeric_validator.validate_dataframe_column(df, col)
+                    if validation_result['issues_found'] > 0:
+                        self.logger.warning(f"Found {validation_result['issues_found']} issues in {col} for LOB {lob}")
+                        df[col] = df[col].apply(self.numeric_validator.fix_excel_number_format)
 
-            # Update columns with new values where they exist
-            for col in self.config.update_columns:
-                update_col = f"{col}_update"
-                if update_col in merged_df.columns:
-                    merged_df[col] = merged_df[update_col].fillna(merged_df[col])
-                    merged_df.drop(columns=[update_col], inplace=True)
+            df['Transaction'] = pd.to_datetime(df['Transaction'], errors='coerce')
+            df = df[
+                (df['Transaction'] >= self.config.first_date) &
+                (df['Transaction'] < self.config.second_date)
+                ]
 
-            self.logger.info(f"Data merge completed: {len(merged_df)} rows")
-            return merged_df
+            df = self.standardize_phone_and_ktp(df)
+            df = self.clean_call_results(df)
+            df = self.standardize_detail_and_status(df)
 
-        except Exception as e:
-            self.logger.error(f"Data merge failed: {e}")
-            raise
+            # Drop unnecessary columns
+            cols_to_drop = [
+                'kelurahan', 'dihubungi', 'melalui media', 'tanggal penarikan',
+                'tanggal call 1', 'hasil call 1', 'tanggal call 2', 'hasil call 1.1',
+                'tanggal call 3', 'hasil call 1.2'
+            ]
+            df = df.drop(columns=[col for col in cols_to_drop if col in df.columns])
 
-    def standardize_phone_numbers(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Standardize phone number format"""
-        try:
-            if 'Phone' in df.columns:
-                df['Phone'] = (
-                    df['Phone']
-                    .astype(str)
-                    .str.replace(r'^(?!0)', '0', regex=True)
-                )
-                self.logger.info("Phone numbers standardized")
+            df = df.merge(df_dealer, on='Id Leads Data User', how='left')
+            df['LOB'] = lob
 
-            if 'Nomor KTP' in df.columns:
-                df['Nomor KTP'] = df['Nomor KTP'].astype(str).fillna("")
-
+            self.logger.info(f"LOB {lob} processed: {len(df)} records")
             return df
 
         except Exception as e:
-            self.logger.error(f"Phone number standardization failed: {e}")
+            self.logger.error(f"Failed to process LOB {lob}: {e}")
             raise
 
-    def process_single_sheet(self, sheet_name: str, raw_name: str) -> pd.DataFrame:
-        """Process a single sheet of data"""
+    def process_external_data(self, file_path: Path, column_mapping: Dict[str, str],
+                              lob_name: str) -> Optional[pd.DataFrame]:
+        """Process external data files (REFI/AMITRA)"""
         try:
-            self.logger.info(f"Processing sheet: {sheet_name} with raw template: {raw_name}")
+            if not file_path.exists():
+                self.logger.warning(f"{lob_name} file not found: {file_path}")
+                return None
 
-            # Decrypt and load raw data
-            decrypted_file = self.decrypt_excel_file(self.config.file_raw, self.config.file_password)
-            raw_data = self.load_sheet_data(decrypted_file, raw_name)
+            self.logger.info(f"Processing {lob_name} data...")
 
-            # Load master data
-            master_data = pd.read_excel(self.config.file_moxa, sheet_name=sheet_name)
+            df = pd.read_excel(file_path)
 
-            # Filter and clean today's data
-            today_data = self.filter_by_date(raw_data, self.config.date)
-            today_data = self.clean_today_data(today_data)
+            # Validate numeric columns before mapping
+            numeric_cols_to_check = ['Lead ID', 'Digital Lead Id', 'Mobile Phone1', 'Nomor HP', 'No KTP', 'Nomor KTP']
+            for col in numeric_cols_to_check:
+                if col in df.columns:
+                    validation_result = self.numeric_validator.validate_dataframe_column(df, col)
+                    if validation_result['issues_found'] > 0:
+                        self.logger.warning(f"Found {validation_result['issues_found']} issues in {col} for {lob_name}")
+                        df[col] = df[col].apply(self.numeric_validator.fix_excel_number_format)
 
-            # Concatenate master and today's data
-            combined_data = pd.concat([master_data, today_data], ignore_index=True)
-            combined_data['tanggal penarikan'] = pd.to_datetime(
-                combined_data['tanggal penarikan'],
-                format='%d/%m/%Y',
-                errors='coerce'
+            df = df[list(column_mapping.keys())].rename(columns=column_mapping)
+
+            if "Transaction" in df.columns:
+                df["Transaction"] = pd.to_datetime(df["Transaction"], errors="coerce")
+
+            df = self.standardize_phone_and_ktp(df)
+            df = df.drop_duplicates(subset=["Id Leads Data User", "Phone", "Nomor KTP"])
+
+            # Load DL data and merge
+            df_dl = pd.read_excel(self.config.data_dl)
+
+            if 'Lead ID' in df_dl.columns:
+                validation_result = self.numeric_validator.validate_dataframe_column(df_dl, 'Lead ID')
+                if validation_result['issues_found'] > 0:
+                    self.logger.warning(f"Found {validation_result['issues_found']} issues in DL Lead ID")
+                    df_dl['Lead ID'] = df_dl['Lead ID'].apply(self.numeric_validator.fix_excel_number_format)
+
+            df_merged = pd.merge(df_dl, df, left_on='Lead ID', right_on='Id User Profile')
+
+            # Select and process required columns
+            required_cols = [
+                'Id User Profile', 'Id Leads Data User', 'Name', 'Phone', 'Nomor KTP',
+                'Transaction', 'Status E-Form Customer', 'Status FM Connect / FM Sales'
+            ]
+            df_final = df_merged[required_cols].copy()
+
+            df_final['Status'] = ''
+            df_final['Detail'] = df_final['Status FM Connect / FM Sales']
+            df_final['Status E-Form Customer'] = df_final['Status E-Form Customer'].fillna('INPROGRESS')
+            df_final['Status'] = df_final['Status E-Form Customer'].map(self.status_mapping)
+
+            # Apply complex status logic
+            df_final['Status'] = df_final.apply(
+                lambda row: 'Canceled'
+                if row['Status E-Form Customer'] == 'INTERESTED' and
+                   row['Status FM Connect / FM Sales'] == 'NOT INTEREST'
+                else row['Status'],
+                axis=1
             )
 
-            # Process call results
-            processed_raw = self.process_call_results(raw_data)
+            df_final = df_final.drop(columns='Status FM Connect / FM Sales')
+            df_final['LOB'] = lob_name
 
-            # Extract result status for updates
-            result_status = processed_raw[
-                ['Id User Profile', 'Id Leads Data User', 'tanggal call 1', 'hasil call 1',
-                 'tanggal call 2', 'hasil call 1.1', 'tanggal call 3', 'hasil call 1.2']
-            ]
-
-            # Merge and update data
-            final_data = self.merge_and_update_data(combined_data, result_status)
-
-            # Standardize data
-            final_data = self.standardize_phone_numbers(final_data)
-
-            self.logger.info(f"Sheet {sheet_name} processing completed: {len(final_data)} rows")
-            return final_data
+            self.logger.info(f"{lob_name} data processed: {len(df_final)} records")
+            return df_final
 
         except Exception as e:
-            self.logger.error(f"Sheet processing failed for {sheet_name}: {e}")
-            raise
+            self.logger.error(f"Failed to process {lob_name} data: {e}")
+            return None
 
-    def autofit_columns(self, writer, sheet_name: str, df: pd.DataFrame) -> None:
-        """Auto-fit column widths in Excel"""
+    def export_to_excel(self, data_sheets: Dict[str, pd.DataFrame],
+                        autofit: bool = None, engine: str = 'xlsxwriter') -> None:
+        """
+        Enhanced export method with autofit capability
+
+        Args:
+            data_sheets: Dictionary of sheet names and DataFrames
+            autofit: Whether to apply autofit (uses config default if None)
+            engine: Excel engine to use
+        """
         try:
-            worksheet = writer.sheets[sheet_name]
+            if autofit is None:
+                autofit = self.config.autofit_enabled
 
-            for i, col in enumerate(df.columns):
-                max_length = max(
-                    df[col].astype(str).str.len().max(),
-                    len(str(col))
-                )
-                adjusted_width = min(max_length + 2, 50)
-                worksheet.set_column(i, i, adjusted_width)
+            self.logger.info(f"Exporting data to {self.config.output_path}")
 
-        except Exception as e:
-            self.logger.error(f"Column autofit failed: {e}")
+            # Export data using pandas
+            with pd.ExcelWriter(self.config.output_path, engine=engine) as writer:
+                for sheet_name, df in data_sheets.items():
+                    if df is not None and not df.empty:
+                        # Final validation before export
+                        processed_df = self._preprocess_dataframe_for_export(df.copy())
+                        processed_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        self.logger.info(f"Exported {sheet_name}: {len(processed_df)} records")
+                    else:
+                        self.logger.warning(f"Skipped empty sheet: {sheet_name}")
 
-    def export_to_excel(self, all_data: Dict[str, pd.DataFrame]) -> None:
-        """Export processed data to Excel with formatting"""
-        try:
-            output_path = self.config.path_folder / self.config.output_filename
+            # Apply formatting if requested
+            if autofit:
+                self._apply_excel_formatting()
 
-            with pd.ExcelWriter(output_path, engine='xlsxwriter',
-                                datetime_format='dd/mm/yyyy') as writer:
-
-                for sheet_name, df in all_data.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
-
-                    # Apply formatting
-                    self.autofit_columns(writer, sheet_name, df)
-
-                    # Add header formatting
-                    workbook = writer.book
-                    worksheet = writer.sheets[sheet_name]
-
-                    header_format = workbook.add_format({
-                        'bold': True,
-                        'text_wrap': True,
-                        'valign': 'top',
-                        'fg_color': '#D7E4BC',
-                        'border': 1
-                    })
-
-                    for col_num, value in enumerate(df.columns.values):
-                        worksheet.write(0, col_num, value, header_format)
-
-            self.logger.info(f"Data exported successfully to {output_path}")
+            self.logger.info(f"Export completed successfully: {self.config.output_path}")
 
         except Exception as e:
             self.logger.error(f"Export failed: {e}")
             raise
 
-    def validate_processed_data(self, data: Dict[str, pd.DataFrame]) -> None:
+    def _preprocess_dataframe_for_export(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Preprocess DataFrame before export"""
+        # Final numeric validation
+        for col in self.config.digit_columns:
+            if col in df.columns:
+                df[col] = df[col].apply(self.numeric_validator.fix_excel_number_format)
+
+        return df
+
+    def _apply_excel_formatting(self) -> None:
+        """Apply Excel formatting using openpyxl"""
+        try:
+            self.logger.info("Applying Excel formatting...")
+
+            # Load workbook with openpyxl for formatting
+            workbook = load_workbook(self.config.output_path)
+
+            for sheet_name in workbook.sheetnames:
+                worksheet = workbook[sheet_name]
+                self.excel_formatter.autofit_columns(worksheet)
+                self.logger.debug(f"Applied autofit to sheet: {sheet_name}")
+
+            # Save formatted workbook
+            workbook.save(self.config.output_path)
+            self.logger.info("Excel formatting applied successfully")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to apply Excel formatting: {e}")
+            # Don't raise - data export was successful, formatting is optional
+
+    def validate_processed_data(self, data_sheets: Dict[str, pd.DataFrame]) -> None:
         """Validate processed data quality"""
         try:
-            for sheet_name, df in data.items():
-                if df.empty:
-                    raise ValueError(f"Sheet {sheet_name} is empty")
+            total_records = 0
+            total_numeric_issues = 0
 
-                required_columns = ['Id User Profile', 'Id Leads Data User']
-                missing_cols = [col for col in required_columns if col not in df.columns]
-                if missing_cols:
-                    raise ValueError(f"Missing required columns in {sheet_name}: {missing_cols}")
+            for sheet_name, df in data_sheets.items():
+                if df is not None:
+                    total_records += len(df)
 
-                # Check for high null percentages
-                null_percentages = df.isnull().sum() / len(df) * 100
-                high_null_cols = null_percentages[null_percentages > 80]
+                    # Check for required columns
+                    required_cols = ['Id User Profile', 'Id Leads Data User']
+                    missing_cols = [col for col in required_cols if col not in df.columns]
+                    if missing_cols:
+                        self.logger.warning(f"Missing columns in {sheet_name}: {missing_cols}")
 
-                if not high_null_cols.empty:
-                    self.logger.warning(f"High null percentages in {sheet_name}: {high_null_cols.to_dict()}")
+                    # Validate numeric columns per sheet
+                    sheet_numeric_issues = 0
+                    for col in self.config.digit_columns:
+                        if col in df.columns:
+                            validation_result = self.numeric_validator.validate_dataframe_column(df, col)
+                            if validation_result['issues_found'] > 0:
+                                sheet_numeric_issues += validation_result['issues_found']
+                                self.logger.warning(
+                                    f"Sheet {sheet_name}, Column {col}: {validation_result['issues_found']} numeric issues")
 
-            self.logger.info("Data validation completed successfully")
+                    total_numeric_issues += sheet_numeric_issues
+                    if sheet_numeric_issues > 0:
+                        self.logger.warning(f"Total numeric issues in {sheet_name}: {sheet_numeric_issues}")
+
+                    # Check data quality
+                    null_percentages = df.isnull().sum() / len(df) * 100
+                    high_null_cols = null_percentages[null_percentages > 50]
+                    if not high_null_cols.empty:
+                        self.logger.warning(f"High null percentages in {sheet_name}: {high_null_cols.to_dict()}")
+
+            self.logger.info(f"Data validation completed. Total records: {total_records}")
+            if total_numeric_issues > 0:
+                self.logger.warning(f"Total numeric format issues found and fixed: {total_numeric_issues}")
+            else:
+                self.logger.info("No numeric format issues detected")
 
         except Exception as e:
             self.logger.error(f"Data validation failed: {e}")
-            raise
 
     def process_all_data(self) -> Dict[str, pd.DataFrame]:
         """Main processing method - orchestrates the entire workflow"""
         try:
-            self.logger.info("Starting MOXA data processing...")
+            self.logger.info("Starting MOXA Status Feedback processing...")
 
-            # Set pandas display options
-            pd.set_option('display.max_columns', None)
-            pd.set_option('display.width', 2000)
+            # Load dealer data
+            df_dealer = self.load_and_process_dealer_data()
 
-            all_data = {}
+            # Process all LOB data
+            data_sheets = {}
 
-            # Process each sheet
-            for sheet_name, raw_name in zip(self.config.sheet_names, self.config.raw_names):
-                processed_data = self.process_single_sheet(sheet_name, raw_name)
-                all_data[sheet_name] = processed_data
+            for lob in self.config.lobs:
+                try:
+                    df_lob = self.process_lob_data(lob, df_dealer)
+                    data_sheets[lob] = df_lob
+                except Exception as e:
+                    self.logger.error(f"Failed to process LOB {lob}: {e}")
+                    data_sheets[lob] = None
+
+            # Process REFI data
+            df_refi = self.process_external_data(
+                self.config.file_refi,
+                self.refi_column_mapping,
+                'REFI'
+            )
+            if df_refi is not None:
+                data_sheets['REFI'] = df_refi
+
+            # Process AMITRA data (currently commented out in original)
+            df_amitra = self.process_external_data(
+                self.config.file_amitra,
+                self.amitra_column_mapping,
+                'AMITRA'
+            )
+            if df_amitra is not None:
+                data_sheets['AMITRA'] = df_amitra
 
             # Validate processed data
-            self.validate_processed_data(all_data)
+            self.validate_processed_data(data_sheets)
 
-            # Export results
-            self.export_to_excel(all_data)
+            # Export to Excel
+            self.export_to_excel(data_sheets)
 
-            self.logger.info("MOXA data processing completed successfully!")
-            return all_data
+            self.logger.info("MOXA Status Feedback processing completed successfully!")
+            return data_sheets
 
         except Exception as e:
             self.logger.error(f"Processing failed: {e}")
@@ -425,15 +750,18 @@ def main():
     """Main execution function"""
     try:
         # Initialize processor with default configuration
-        processor = MOXADataProcessor()
+        processor = MOXAStatusProcessor()
 
         # Process all data
         results = processor.process_all_data()
 
         print("Processing completed successfully!")
-        print(f"Processed {len(results)} sheets:")
+        print(f"Generated sheets:")
         for sheet_name, df in results.items():
-            print(f"  - {sheet_name}: {len(df)} rows")
+            if df is not None:
+                print(f"  - {sheet_name}: {len(df)} records")
+            else:
+                print(f"  - {sheet_name}: Failed/Skipped")
 
     except Exception as e:
         print(f"Processing failed: {e}")
