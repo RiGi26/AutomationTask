@@ -1,125 +1,230 @@
-import pandas as pd
 import os
-from datetime import datetime
-import numpy as np
-from pathlib import Path
-import openpyxl as op
-from openpyxl.styles import Alignment, Font, Border, Side
 import re
 import time
-import win32com.client as win32
+from datetime import datetime
+from pathlib import Path
+import logging
 
-folder_date = ("14")  # change
-folder_year = "2025"  # change
-folder_month = "Mei"  # change
+import numpy as np
+import openpyxl as op
+import pandas as pd
+import win32com.client as win32
+from openpyxl.styles import Alignment, Font, Border, Side
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Configuration Constants
+FOLDER_DATE = "30"  # change
+FOLDER_YEAR = "2025"  # change
+FOLDER_MONTH = "Mei"  # change
+
+# Date configurations
 current_date = datetime.now().strftime("%Y%m%d")
 dispatch_date = datetime.now().strftime("%d/%m/%Y")
 filter_date = datetime.now().strftime("%d %B %Y")
-column_date = ["Tanggal Lahir"]
 
-# path
-base_path = Path(f"D:\\Daily MOXA\\blackup kirim dealer\\{folder_year}\\{folder_month}\\{folder_date}")
-path_file = Path(
-    f"D:\\Daily MOXA\\blackup kirim dealer\\{folder_year}\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx")
-path = Path("D:\\Daily MOXA\\Master Leads Interest 2025.xlsx")
-file = "D:\\Daily MOXA\\Automate Send to MD\\Email list.xlsx"
-file_DaaS = "D:\\Daily MOXA\\DAAS\\Rekap DAAS Februari 2023.xlsx"
-path_folder = Path("D:\\Daily MOXA")
-data_recap = Path("D:\\Daily MOXA\\Leads FIFGROUP Compile all MD v2.xlsx")
-output_file_path_recap = os.path.join(path_folder, "Leads FIFGROUP Compile all MD v2.xlsx")
+# Path configurations
+BASE_PATHS = {
+    'base': Path(f"D:\\Daily MOXA\\blackup kirim dealer\\{FOLDER_YEAR}\\{FOLDER_MONTH}\\{FOLDER_DATE}"),
+    'data_file': Path(
+        f"D:\\Daily MOXA\\blackup kirim dealer\\{FOLDER_YEAR}\\{FOLDER_MONTH}\\{FOLDER_DATE}\\DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx"),
+    'master': Path("D:\\Daily MOXA\\Master Leads Interest 2025.xlsx"),
+    'email_list': "D:\\Daily MOXA\\Automate Send to MD\\Email list.xlsx",
+    'daas_file': "D:\\Daily MOXA\\DAAS\\Rekap DAAS Februari 2023.xlsx",
+    'folder': Path("D:\\Daily MOXA"),
+    'recap': Path("D:\\Daily MOXA\\Leads FIFGROUP Compile all MD v2.xlsx")
+}
 
-try:
-    # data raw
-    master = pd.read_excel(path, sheet_name=folder_month, parse_dates=['Tanggal Lahir'])
-    email_list = pd.read_excel(file)
-    dealer_DaaS = pd.read_excel(file_DaaS)
+# Column mappings
+COLUMN_MAPPING = {
+    "Id Leads Data User": "Id Leads Data User",
+    "Nama": "Nama",
+    "Gender": "Gender",
+    "Alamat": "Alamat",
+    "Kelurahan": "Kelurahan",
+    "Kecamatan": "Kecamatan",
+    "Propinsi": "Propinsi",
+    "Kota/Kabupaten": "Kota/Kabupaten",
+    "No HP": "No HP",
+    "MD (3 DIGIT)": "Main Dealer",
+    "Pendidikan": "Pendidikan",
+    "Tanggal Lahir": "Tanggal Lahir",
+    "E-MAIL": "E-MAIL",
+    "Dealer Sebelumnya (Jika Ada)": "Dealer Sebelumnya (Jika Ada)",
+    "remarks": "Remarks/Keterangan"
+}
 
-    # Filtering data master
-    df_filtered = master[
-        master["tgl"] == pd.to_datetime(filter_date)]  # Double Check when daily task not sended on Time
-    filter_DaaS = dealer_DaaS[dealer_DaaS['Dispatch Date'] == pd.to_datetime(filter_date)]
+FINAL_COLUMNS = [
+    "Id Leads Data User", "Nama", "Gender", "Alamat", "Kelurahan", "Kecamatan",
+    "Kota/Kabupaten", "Propinsi", "No HP", "No Hp-2", "Sales Date", "Varian Motor",
+    "Main Dealer", "Assign Dealer Code (5 DIGIT)", "Propensity", "Pekerjaan",
+    "Pendidikan", "Pengeluaran", "Agama", "Tanggal Lahir", "Frame No Terakhir",
+    "Jenis Penjualan", "Sales ID", "Nama Leasing Sebelumnya", "Nama salesman",
+    "Source Leads", "Platform Data", "Dealer Sebelumnya (Jika Ada)",
+    "Remarks/Keterangan", "Rekomendasi DP/Angsuran (Tenure)",
+    "Varian motor yang diinginkan", "Warna varian motor", "E-MAIL",
+    "FACEBOOK", "INSTAGRAM", "TWITTER"
+]
 
-    # Set up Outlook
-    outlook = win32.Dispatch("outlook.application")
-except Exception as e:
-    print(f"Failed to read master file: {e}")
-    exit()
+MPM_COLUMNS = [
+    "Id Leads Data User", "Nama", "No HP", "Kota/Kabupaten",
+    "Kecamatan", "Alamat", "Main Dealer"
+]
 
-processed_dealers = set()
-
-output_dir = f"D:\\Daily MOXA\\blackup kirim dealer\\{folder_year}\\{folder_month}\\{folder_date}"
-os.makedirs(output_dir, exist_ok=True)
-
-
-def adjust_column_width_and_format(filepath, *sheet_names, font_name='Calibri', font_size=11):
-    workbook = op.load_workbook(filepath)
-    for sheet_name in sheet_names:
-        sheet = workbook[sheet_name]
-
-        font_style = Font(name=font_name, size=font_size)
-        alignment_style = Alignment(horizontal='left')  # Rata kiri
-
-        thin_border = Border(
-            left=Side(style='thin'),
-            right=Side(style='thin'),
-            top=Side(style='thin'),
-            bottom=Side(style='thin')
-        )
-
-        for column_cells in sheet.columns:
-            max_length = 0
-            column = column_cells[0].column_letter
-
-            for cell in column_cells:
-                try:
-                    if cell.value:
-                        max_length = max(max_length, len(str(cell.value)))
-                        cell.font = font_style
-                        cell.alignment = alignment_style
-                        cell.border = thin_border
-                except:
-                    pass
-
-            adjusted_width = (max_length + 2)
-            sheet.column_dimensions[column].width = adjusted_width
-
-    workbook.save(filepath)
+HIDDEN_COLUMNS = [
+    'C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG',
+    'AH', 'AI', 'AJ'
+]
 
 
-def attach_files(mail, attachment_filenames):
-    for filename, path_base in attachment_filenames:
-        if path_base:
-            attachment_path = path_base / filename
-            if attachment_path.exists():
-                mail.Attachments.Add(str(attachment_path))
-                time.sleep(1)
-            else:
-                continue
-        else:
-            continue
+class DataProcessor:
+    def __init__(self):
+        self.processed_dealers = set()
+        self.outlook = None
+        self.master_df = None
+        self.email_list_df = None
+        self.dealer_daas_df = None
 
+    def initialize_data(self):
+        """Initialize all required data sources"""
+        try:
+            # Read master data
+            self.master_df = pd.read_excel(BASE_PATHS['master'], sheet_name=FOLDER_MONTH,
+                                           parse_dates=['Tanggal Lahir'])
+            self.email_list_df = pd.read_excel(BASE_PATHS['email_list'])
+            self.dealer_daas_df = pd.read_excel(BASE_PATHS['daas_file'])
 
-def send_email(row, main_dealer_name, project_type, base_path):
-    if project_type == 'DaaS & MOXA':
-        subject = f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (DaaS & MOXA)"
-        attachment_filenames = [(f"Data leads FIFGROUP {current_date} {row['Main Dealer']}.xlsx", base_path),
-                                (f"Data Leads FIFGROUP {current_date} {row['Main Dealer']} DaaS.xlsx", base_path)]
-    elif project_type == 'DaaS':
-        subject = f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (DaaS)"
-        attachment_filenames = [(f"Data Leads FIFGROUP {current_date} {row['Main Dealer']} DaaS.xlsx", base_path)]
-    elif project_type == 'MOXA':
-        subject = f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (MOXA)"
-        attachment_filenames = [(f"Data leads FIFGROUP {current_date} {row['Main Dealer']}.xlsx", base_path)]
-    else:
-        print(f"Invalid project type: {project_type}")
-        return
+            # Initialize Outlook
+            self.outlook = win32.Dispatch("outlook.application")
 
-    # create email
-    mail = outlook.CreateItem(0)
-    mail.To = row["to"]
-    mail.CC = row["cc"]
-    mail.Subject = subject
-    mail.HTMLBody = f"""
+            logger.info("Data initialization completed successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to initialize data: {e}")
+            return False
+
+    def filter_data(self):
+        """Filter data based on date criteria"""
+        try:
+            df_filtered = self.master_df[
+                self.master_df["tgl"] == pd.to_datetime(filter_date)
+                ]
+            filter_daas = self.dealer_daas_df[
+                self.dealer_daas_df['Dispatch Date'] == pd.to_datetime(filter_date)
+                ]
+
+            logger.info(f"Filtered data: {len(df_filtered)} MOXA records, {len(filter_daas)} DaaS records")
+            return df_filtered, filter_daas
+
+        except Exception as e:
+            logger.error(f"Failed to filter data: {e}")
+            return None, None
+
+    def normalize_phone_number(self, phone_str):
+        """Normalize phone number format"""
+        phone_str = str(phone_str)
+        return "0" + phone_str if not phone_str.startswith("0") else phone_str
+
+    def process_main_data(self, df_filtered):
+        """Process and transform main data"""
+        try:
+            # Apply column mapping
+            df_pindah = df_filtered[list(COLUMN_MAPPING.keys())].rename(columns=COLUMN_MAPPING)
+
+            # Normalize phone numbers
+            df_pindah["No HP"] = df_pindah["No HP"].apply(self.normalize_phone_number)
+
+            # Add missing columns
+            for kolom in FINAL_COLUMNS:
+                if kolom not in df_pindah.columns:
+                    df_pindah[kolom] = np.nan
+
+            df_pindah = df_pindah[FINAL_COLUMNS]
+            logger.info("Main data processing completed")
+            return df_pindah
+
+        except Exception as e:
+            logger.error(f"Failed to process main data: {e}")
+            return None
+
+    def save_excel_with_formatting(self, df, output_path, sheet_name='Sheet1'):
+        """Save Excel file with consistent formatting"""
+        try:
+            with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+                df_clean = df.fillna('')
+                df_clean.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                workbook = writer.book
+                worksheet = writer.sheets[sheet_name]
+                border_format = workbook.add_format({'border': 1})
+                date_format = workbook.add_format({'num_format': 'dd/mm/yyyy', 'border': 1})
+
+                # Apply formatting
+                for row_num in range(len(df_clean) + 1):
+                    for col_num, col in enumerate(df_clean.columns):
+                        if row_num == 0:
+                            worksheet.write(row_num, col_num, col, border_format)
+                        else:
+                            value = df_clean.iloc[row_num - 1, col_num]
+                            format_to_use = date_format if col == 'Tanggal Lahir' else border_format
+                            worksheet.write(row_num, col_num, value, format_to_use)
+
+                # Auto-adjust column widths
+                for idx, col in enumerate(df_clean.columns):
+                    max_len = max(df_clean[col].astype(str).map(len).max(), len(col)) + 2
+                    worksheet.set_column(idx, idx, max_len)
+
+            logger.info(f"File saved successfully: {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to save file {output_path}: {e}")
+            return False
+
+    def split_data_by_dealer(self, df, output_dir):
+        """Split data by dealer and save individual files"""
+        unique_dealers = df["Main Dealer"].unique()
+
+        for dealer in unique_dealers:
+            try:
+                df_dealer = df[df["Main Dealer"] == dealer].copy()
+                df_dealer["No HP"] = df_dealer["No HP"].apply(self.normalize_phone_number)
+
+                # Special handling for MPM dealers
+                if dealer in ["PT MPM - MALANG", "PT MPM - SURABAYA"]:
+                    df_dealer = df_dealer[MPM_COLUMNS]
+
+                output_path = output_dir / f"Data Leads FIFGROUP {current_date} {dealer}.xlsx"
+                self.save_excel_with_formatting(df_dealer, output_path)
+                logger.info(f"File split completed for {dealer}")
+
+            except Exception as e:
+                logger.error(f"Failed to split data for {dealer}: {e}")
+
+    def extract_dealer_name(self, filename):
+        """Extract dealer name from filename"""
+        match = re.search(r'FIFGROUP \d+ (.+)\.xlsx', filename)
+        if match:
+            dealer_name = match.group(1).replace('DaaS', '').strip()
+            return dealer_name
+        return None
+
+    def attach_files(self, mail, attachment_filenames):
+        """Attach files to email"""
+        for filename, path_base in attachment_filenames:
+            if path_base:
+                attachment_path = path_base / filename
+                if attachment_path.exists():
+                    mail.Attachments.Add(str(attachment_path))
+                    time.sleep(1)
+
+    def create_email_body(self, project_type):
+        """Create standardized email body"""
+        return f"""
 <html>
 <body style="font-family: Calibri, sans-serif; font-size: 11pt; color: black;">
 <p>Dear Bapak & Ibu Yth,</p>
@@ -139,271 +244,218 @@ Riyadh Akhdan Syafi<br>
 </body>
 </html>
 """
-    attach_files(mail, attachment_filenames)
 
-    # Display
-    mail.Display()
+    def send_email(self, row, main_dealer_name, project_type, base_path):
+        """Send email with appropriate attachments"""
+        email_configs = {
+            'DaaS & MOXA': {
+                'subject': f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (DaaS & MOXA)",
+                'attachments': [
+                    (f"Data leads FIFGROUP {current_date} {row['Main Dealer']}.xlsx", base_path),
+                    (f"Data Leads FIFGROUP {current_date} {row['Main Dealer']} DaaS.xlsx", base_path)
+                ]
+            },
+            'DaaS': {
+                'subject': f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (DaaS)",
+                'attachments': [(f"Data Leads FIFGROUP {current_date} {row['Main Dealer']} DaaS.xlsx", base_path)]
+            },
+            'MOXA': {
+                'subject': f"Data leads FIFGROUP {filter_date} {row['Main Dealer']} (MOXA)",
+                'attachments': [(f"Data leads FIFGROUP {current_date} {row['Main Dealer']}.xlsx", base_path)]
+            }
+        }
 
-    # Sending
-    mail.Send()
+        if project_type not in email_configs:
+            logger.error(f"Invalid project type: {project_type}")
+            return
 
+        config = email_configs[project_type]
 
-def extract_dealer_name(filename):
-    match = re.search(r'FIFGROUP \d+ (.+)\.xlsx', filename)
-    if match:
-        dealer_name = match.group(1)
-        dealer_name = dealer_name.replace('DaaS', '').strip()
-        return dealer_name
-    return None
-
-
-pemetaan_kolom = {
-    "Id Leads Data User": "Id Leads Data User",
-    "Nama": "Nama",
-    "Gender": "Gender",
-    "Alamat": "Alamat",
-    "Kelurahan": "Kelurahan",
-    "Kecamatan": "Kecamatan",
-    "Propinsi": "Propinsi",
-    "Kota/Kabupaten": "Kota/Kabupaten",
-    "No HP": "No HP",
-    "MD (3 DIGIT)": "Main Dealer",
-    "Pendidikan": "Pendidikan",
-    "Tanggal Lahir": "Tanggal Lahir",
-    "E-MAIL": "E-MAIL",
-    "Dealer Sebelumnya (Jika Ada)": "Dealer Sebelumnya (Jika Ada)",
-    "remarks": "Remarks/Keterangan"
-}
-
-kolom_akhir = [
-    "Id Leads Data User", "Nama", "Gender", "Alamat", "Kelurahan", "Kecamatan", "Kota/Kabupaten",
-    "Propinsi", "No HP", "No Hp-2", "Sales Date", "Varian Motor", "Main Dealer",
-    "Assign Dealer Code (5 DIGIT)", "Propensity", "Pekerjaan", "Pendidikan",
-    "Pengeluaran", "Agama", "Tanggal Lahir", "Frame No Terakhir", "Jenis Penjualan",
-    "Sales ID", "Nama Leasing Sebelumnya", "Nama salesman", "Source Leads",
-    "Platform Data", "Dealer Sebelumnya (Jika Ada)", "Remarks/Keterangan",
-    "Rekomendasi DP/Angsuran (Tenure)", "Varian motor yang diinginkan",
-    "Warna varian motor", "E-MAIL", "FACEBOOK", "INSTAGRAM", "TWITTER"
-]
-
-try:
-    df_pindah = df_filtered[list(pemetaan_kolom.keys())].rename(columns=pemetaan_kolom)
-    df_pindah["No HP"] = df_pindah["No HP"].astype(str).apply(lambda x: "0" + x if not x.startswith("0") else x)
-except:
-    print("Failed to select and rename columns")
-
-try:
-    for kolom in kolom_akhir:
-        if kolom not in df_pindah.columns:
-            df_pindah[kolom] = np.nan
-
-    df_pindah = df_pindah[kolom_akhir]
-except:
-    print("Failed to add missing columns")
-
-# file path 
-output_file_path = os.path.join(output_dir, f"DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx")
-
-try:
-    with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
-        df_pindah = df_pindah.fillna('')
-
-        df_pindah.to_excel(writer, sheet_name='Sheet1', index=False)
-        workbook = writer.book
-        worksheet = writer.sheets['Sheet1']
-        border_format = workbook.add_format({'border': 1})
-        date_format = workbook.add_format({'num_format': 'dd/mm/yyyy', 'border': 1})
-
-        for row_num in range(len(df_pindah) + 1):
-            for col_num, col in enumerate(df_pindah.columns):
-                if row_num == 0:
-                    value = col  # Header
-                    worksheet.write(row_num, col_num, value, border_format)
-                else:
-                    value = df_pindah.iloc[row_num - 1, col_num]
-
-                    if col == 'Tanggal Lahir':
-                        worksheet.write(row_num, col_num, value, date_format)
-                    else:
-                        worksheet.write(row_num, col_num, value, border_format)
-
-        for idx, col in enumerate(df_pindah.columns):
-            max_len = max(df_pindah[col].astype(str).map(len).max(), len(col)) + 2
-            worksheet.set_column(idx, idx, max_len)
-
-    print(f"File disimpan dengan format yang sama di {output_file_path}")
-except Exception as e:
-    print(f"Failed to save the output file: {e}")
-
-file = f"D:\\Daily MOXA\\blackup kirim dealer\\{folder_year}\\{folder_month}\\{folder_date}\\DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx"
-
-try:
-    extracted_file = pd.read_excel(file)
-except Exception as e:
-    print(f"Failed to read extracted file: {e}")
-    exit()
-
-unique_values = extracted_file["Main Dealer"].unique()
-
-for unique in unique_values:
-    if unique in ["PT MPM - MALANG", "PT MPM - SURABAYA"]:
-        kolom_mpm = ["Id Leads Data User", "Nama", "No HP", "Kota/Kabupaten", "Kecamatan", "Alamat", "Main Dealer"]
-        df_final = extracted_file[extracted_file["Main Dealer"] == unique].copy()
-        df_final = df_final[kolom_mpm]
-        df_final["No HP"] = df_final["No HP"].astype(str).apply(lambda x: "0" + x if not x.startswith("0") else x)
-
-        output_path = os.path.join(output_dir, f"Data Leads FIFGROUP {current_date} {unique}.xlsx")
         try:
-            with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-                df_final.to_excel(writer, sheet_name="Sheet1", index=False)
-                worksheet = writer.sheets["Sheet1"]
+            mail = self.outlook.CreateItem(0)
+            mail.To = row["to"]
+            mail.CC = row["cc"]
+            mail.Subject = config['subject']
+            mail.HTMLBody = self.create_email_body(project_type)
 
-                for idx, col in enumerate(df_final.columns):
-                    max_len = max(df_final[col].astype(str).map(len).max(), len(col)) + 2
-                    worksheet.set_column(idx, idx, max_len)
-            print(f"File has been Splitting {unique}")
+            self.attach_files(mail, config['attachments'])
+            mail.Display()
+            mail.Send()
+
+            logger.info(f"Email sent successfully to {main_dealer_name} for {project_type}")
+
         except Exception as e:
-            print(f"Failed to save the file for {unique}: {e}")
-    else:
-        df_output = extracted_file[extracted_file["Main Dealer"] == unique].copy()
-        df_output["No HP"] = df_output["No HP"].astype(str).apply(lambda x: "0" + x if not x.startswith("0") else x)
+            logger.error(f"Failed to send email to {main_dealer_name}: {e}")
 
-        output_path = os.path.join(output_dir, f"Data Leads FIFGROUP {current_date} {unique}.xlsx")
+    def process_email_sending(self, base_path, dealer_df, filter_daas):
+        """Process email sending logic"""
         try:
-            with pd.ExcelWriter(output_path, engine="xlsxwriter") as writer:
-                df_output.to_excel(writer, sheet_name="Sheet1", index=False)
-                worksheet = writer.sheets["Sheet1"]
+            # Get unique dealers
+            main_dealer_filtered = dealer_df['Main Dealer'].unique()
+            daas_main_dealer = filter_daas['Main Dealer'].unique()
 
-                for idx, col in enumerate(df_output.columns):
-                    max_len = max(df_output[col].astype(str).map(len).max(), len(col)) + 2
-                    worksheet.set_column(idx, idx, max_len)
-            print(f"File has been Splitting {unique}")
-        except Exception as e:
-            print(f"Failed to save the file for {unique}: {e}")
+            # Filter email lists
+            filter_email = self.email_list_df[self.email_list_df['Main Dealer'].isin(main_dealer_filtered)]
+            filter_email_daas = self.email_list_df[self.email_list_df['Main Dealer'].isin(daas_main_dealer)]
 
-# filtering data
-# Moxa
-try:
-    dealer = pd.read_excel(path_file)
-except Exception as e:
-    print(f"reading file has been error {e}")
+            # Find overlapping dealers
+            overlapping_dealers = set(dealer_df['Main Dealer']).intersection(filter_daas["Main Dealer"])
+            filter_email_both = self.email_list_df[self.email_list_df['Main Dealer'].isin(overlapping_dealers)]
 
-main_dealer_filtered = dealer['Main Dealer'].unique()
-filter_email = email_list[email_list['Main Dealer'].isin(main_dealer_filtered)]
-filter_email_MD = filter_email['Main Dealer'].unique()
+            # Process files and send emails
+            with os.scandir(base_path) as entries:
+                for entry in entries:
+                    if entry.is_file() and entry.name.endswith('.xlsx'):
+                        dealer_name = self.extract_dealer_name(entry.name)
 
-# DaaS
-DaaS_main_dealer = filter_DaaS['Main Dealer'].unique()
-filter_email_DaaS = email_list[email_list['Main Dealer'].isin(DaaS_main_dealer)]
-filter_email_DaaS_MD = filter_email_DaaS['Main Dealer'].unique()
-
-# Moxa DaaS
-over_lapping_maindealer = set(dealer['Main Dealer']).intersection(filter_DaaS["Main Dealer"])
-over_lapping_maindealer_list = list(over_lapping_maindealer)
-filter_email_DaaS_MOXA = email_list[email_list['Main Dealer'].isin(over_lapping_maindealer)]
-
-try:
-    with os.scandir(base_path) as entries:
-        for entry in entries:
-            if entry.is_file() and entry.name.endswith('.xlsx'):
-                dealer_name = extract_dealer_name(entry.name)
-
-                if dealer_name is None or dealer_name in processed_dealers:
-                    continue
-
-                if dealer_name in over_lapping_maindealer_list:
-                    # Send DaaS & MOXA email
-                    for index, row in filter_email_DaaS_MOXA.iterrows():
-                        if dealer_name == row['Main Dealer']:
-                            send_email(row, dealer_name, 'DaaS & MOXA', base_path)
-                            processed_dealers.add(dealer_name)
-                            print(f"Sending DaaS & MOXA email to {dealer_name}")
-                        else:
+                        if dealer_name is None or dealer_name in self.processed_dealers:
                             continue
 
-                elif dealer_name not in over_lapping_maindealer_list:
-                    if dealer_name in filter_email_DaaS_MD:
-                        for index, row in filter_email_DaaS.iterrows():
-                            if dealer_name == row['Main Dealer']:
-                                send_email(row, dealer_name, 'DaaS', base_path)
-                                processed_dealers.add(dealer_name)
-                                print(f"Sending DaaS email to {dealer_name}")
-                            else:
-                                continue
+                        self._send_appropriate_email(dealer_name, overlapping_dealers,
+                                                     filter_email_both, filter_email_daas,
+                                                     filter_email, base_path)
 
-                    elif dealer_name in filter_email_MD:
-                        for index, row in filter_email.iterrows():
-                            if dealer_name == row['Main Dealer']:
-                                send_email(row, dealer_name, 'MOXA', base_path)
-                                processed_dealers.add(dealer_name)
-                                print(f"Sending MOXA email to {dealer_name}")
-                            else:
-                                continue
-except Exception as e:
-    print(f"error occurs {e}")
+        except Exception as e:
+            logger.error(f"Error in email processing: {e}")
 
-# Membaca file Excel dan menggabungkannya
-try:
-    df_recap = pd.read_excel(data_recap, parse_dates=['Tanggal Lahir'])
-    df_daily = pd.read_excel(path_file, parse_dates=['Tanggal Lahir'])
-    df_daily['Source Leads'] = 'FIF'
-    df_daily['Platform Data'] = 'MOXA'
-    filter_daily = df_daily[df_daily['Main Dealer'] != 'blacklist']
-    id_daily = filter_daily['Id Leads Data User'].tolist()
-    df_merge = pd.concat([df_recap, df_daily])
-    try:
-        df_merge['No HP'] = df_merge['No HP'] = df_merge['No HP'].astype(str).apply(
-            lambda x: "0" + x if not x.startswith("0") else x)
-        df_merge.loc[df_merge['Id Leads Data User'].isin(id_daily), "Dispatch Date"] = dispatch_date
-    except Exception as e:
-        print(f" error while running df_merge : {e}")
-except Exception as e:
-    print(f"error while running: {e}")
+    def _send_appropriate_email(self, dealer_name, overlapping_dealers,
+                                filter_email_both, filter_email_daas,
+                                filter_email, base_path):
+        """Send appropriate email based on dealer type"""
+        if dealer_name in overlapping_dealers:
+            # Send DaaS & MOXA email
+            matching_rows = filter_email_both[filter_email_both['Main Dealer'] == dealer_name]
+            for _, row in matching_rows.iterrows():
+                self.send_email(row, dealer_name, 'DaaS & MOXA', base_path)
+                self.processed_dealers.add(dealer_name)
+                break
+        else:
+            # Check if DaaS only
+            daas_rows = filter_email_daas[filter_email_daas['Main Dealer'] == dealer_name]
+            if not daas_rows.empty:
+                for _, row in daas_rows.iterrows():
+                    self.send_email(row, dealer_name, 'DaaS', base_path)
+                    self.processed_dealers.add(dealer_name)
+                    break
+            else:
+                # MOXA only
+                moxa_rows = filter_email[filter_email['Main Dealer'] == dealer_name]
+                for _, row in moxa_rows.iterrows():
+                    self.send_email(row, dealer_name, 'MOXA', base_path)
+                    self.processed_dealers.add(dealer_name)
+                    break
 
-# Menulis data ke Excel menggunakan pandas dan XlsxWriter
-try:
-    with pd.ExcelWriter(output_file_path_recap, engine='xlsxwriter') as writer:
-        df_merge.to_excel(writer, sheet_name="concate", index=False)
-except Exception as e:
-    print(f"Error detail: {e}")
+    def process_recap_file(self):
+        """Process and update recap file"""
+        try:
+            df_recap = pd.read_excel(BASE_PATHS['recap'], parse_dates=['Tanggal Lahir'])
+            df_daily = pd.read_excel(BASE_PATHS['data_file'], parse_dates=['Tanggal Lahir'])
 
-wb = op.load_workbook(output_file_path_recap)
-ws = wb.active
+            # Add required columns
+            df_daily['Source Leads'] = 'FIF'
+            df_daily['Platform Data'] = 'MOXA'
 
-thin_border = Border(left=Side(style='thin'), right=Side(style='thin'),
-                     top=Side(style='thin'), bottom=Side(style='thin'))
+            # Filter and merge
+            filter_daily = df_daily[df_daily['Main Dealer'] != 'blacklist']
+            id_daily = filter_daily['Id Leads Data User'].tolist()
+            df_merge = pd.concat([df_recap, df_daily])
 
-left_alignment = Alignment(horizontal='left')
+            # Normalize phone numbers and update dispatch date
+            df_merge['No HP'] = df_merge['No HP'].apply(self.normalize_phone_number)
+            df_merge.loc[df_merge['Id Leads Data User'].isin(id_daily), "Dispatch Date"] = dispatch_date
 
-for col in range(1, 46):
-    max_length = 0
-    col_letter = ws.cell(row=1, column=col).column_letter
-    for row in range(1, ws.max_row + 1):  # Iterasi semua baris
-        cell = ws.cell(row=row, column=col)
-        # Menambahkan border
-        cell.border = thin_border
-        # Mengatur lebar kolom otomatis
+            # Save merged data
+            output_path = BASE_PATHS['folder'] / "Leads FIFGROUP Compile all MD v2.xlsx"
+            self._save_recap_with_formatting(df_merge, output_path)
 
-        if isinstance(cell.value, datetime):
-            cell.number_format = 'DD/MM/YYYY'
+            logger.info(f"Recap file processed successfully: {output_path}")
 
-        cell.alignment = left_alignment
+        except Exception as e:
+            logger.error(f"Error processing recap file: {e}")
 
-        if cell.value:
-            max_length = max(max_length, len(str(cell.value)))
+    def _save_recap_with_formatting(self, df_merge, output_path):
+        """Save recap file with specific formatting"""
+        # Save with pandas first
+        with pd.ExcelWriter(output_path, engine='xlsxwriter') as writer:
+            df_merge.to_excel(writer, sheet_name="concate", index=False)
 
-    # Mengatur lebar kolom berdasarkan panjang maksimum
-    adjusted_width = max_length + 2
-    ws.column_dimensions[col_letter].width = adjusted_width
+        # Apply openpyxl formatting
+        wb = op.load_workbook(output_path)
+        ws = wb.active
 
-hidden_column = ['C', 'D', 'E', 'F', 'G', 'H', 'J', 'K', 'L', 'N', 'O', 'P', 'Q', 'R', 'S',
-                 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG',
-                 'AH', 'AI', 'AJ']
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+        left_alignment = Alignment(horizontal='left')
 
-for hidden in hidden_column:
-    ws.column_dimensions[hidden].hidden = True
+        # Format cells and adjust column widths
+        for col in range(1, 46):
+            max_length = 0
+            col_letter = ws.cell(row=1, column=col).column_letter
 
-# Menyimpan file yang sudah diubah
-wb.save(output_file_path_recap)
+            for row in range(1, ws.max_row + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.border = thin_border
+                cell.alignment = left_alignment
 
-print(f"File berhasil disimpan di: {output_file_path_recap}")
+                if isinstance(cell.value, datetime):
+                    cell.number_format = 'DD/MM/YYYY'
+
+                if cell.value:
+                    max_length = max(max_length, len(str(cell.value)))
+
+            # Set column width
+            ws.column_dimensions[col_letter].width = max_length + 2
+
+        # Hide specified columns
+        for col in HIDDEN_COLUMNS:
+            ws.column_dimensions[col].hidden = True
+
+        wb.save(output_path)
+
+
+def main():
+    """Main execution function"""
+    # Create output directory
+    os.makedirs(BASE_PATHS['base'], exist_ok=True)
+
+    # Initialize processor
+    processor = DataProcessor()
+
+    if not processor.initialize_data():
+        logger.error("Failed to initialize data. Exiting.")
+        return
+
+    # Filter data
+    df_filtered, filter_daas = processor.filter_data()
+    if df_filtered is None:
+        logger.error("Failed to filter data. Exiting.")
+        return
+
+    # Process main data
+    df_processed = processor.process_main_data(df_filtered)
+    if df_processed is None:
+        logger.error("Failed to process main data. Exiting.")
+        return
+
+    # Save main combined file
+    main_output_path = BASE_PATHS['base'] / f"DATA GABUNGAN LEADS FIFGROUP {current_date}.xlsx"
+    if not processor.save_excel_with_formatting(df_processed, main_output_path):
+        logger.error("Failed to save main file. Exiting.")
+        return
+
+    # Split data by dealer
+    processor.split_data_by_dealer(df_processed, BASE_PATHS['base'])
+
+    # Process email sending
+    processor.process_email_sending(BASE_PATHS['base'], df_processed, filter_daas)
+
+    # Process recap file
+    processor.process_recap_file()
+
+    logger.info("All processing completed successfully!")
+
+
+if __name__ == "__main__":
+    main()
