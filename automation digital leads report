@@ -1,0 +1,623 @@
+import logging
+from pathlib import Path
+import time
+from datetime import datetime
+
+import numpy as np
+import openpyxl
+import pandas as pd
+from openpyxl.utils import get_column_letter
+from openpyxl.utils.dataframe import dataframe_to_rows
+from tqdm import tqdm
+from openpyxl import load_workbook
+import xlwings as xw
+
+# Configure pandas display options
+pd.set_option('display.max_columns', None)
+pd.set_option('display.width', 2000)
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Configuration
+path_folder = Path("D:\\Daily MOXA")
+file_raw = Path(r"D:\Report DL UFI\Mei\27\RPT_DIGITAL_LEADS_HO_2025.xls.xlsx")  # change
+output_temp = 'temp_hasil_pivot.xlsx'
+output_file = 'hasil_pivot.xlsx'
+tanggal = '01/05/2025'
+periode = 202505
+today = '27/01/2025'
+validation_column = ['AGING UH', 'AGING MCE', 'AGING FM SALES', 'AGING EFORM CUST']
+
+# Reference data for area mapping
+data = {
+    'Area': [
+        'BALI', 'BANTEN', 'DIY', 'JABAR 1', 'JABAR 2', 'JABAR 3', 'JABAR 4', 'JABAR 5',
+        'JAMBI', 'JATA 1', 'JATA 2', 'JATA 3', 'JATENG 1', 'JATENG 2', 'JATIM 1', 'JATIM 2', 'JATIM 3', 'JATIM 4',
+        'KALBAR', 'KALSELTENG', 'KALTIMTARA', 'LAMBABEL', 'NAD RIKEP', 'NUSA TENGGARA', 'PAPUA', 'RIDAR',
+        'SULSELBAR', 'SULTENGTRAM', 'SULUT', 'SUMBAR', 'SUMSEL', 'SUMUT 1', 'SUMUT 2'
+    ],
+    'Wilayah': [
+        'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI',
+        'NON JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI', 'JAWA BALI',
+        'JAWA BALI', 'JAWA BALI',
+        'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI',
+        'NON JAWA BALI', 'NON JAWA BALI',
+        'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI', 'NON JAWA BALI',
+        'NON JAWA BALI'
+    ]
+}
+
+
+def remove_formulas_with_xlwings(file_path, output_temp):
+    """
+    Alternative method using xlwings - requires Excel to be installed
+    This method actually opens Excel and calculates formulas
+    """
+    try:
+        print("Using xlwings method (requires Excel)...")
+        app = xw.App(visible=False)
+        wb = app.books.open(file_path)
+
+        # Calculate all formulas
+        wb.app.calculate()
+
+        # Convert formulas to values
+        for sheet in wb.sheets:
+            # Select all used range
+            used_range = sheet.used_range
+            if used_range is not None:
+                # Copy and paste special as values
+                used_range.copy()
+                used_range.paste(paste='values')
+
+        # Save and close
+        wb.save(output_temp)
+        wb.close()
+        app.quit()
+
+        print(f"✓ Formulas converted using xlwings: {output_temp}")
+        return True
+
+    except Exception as e:
+        print(f"✗ xlwings method failed: {e}")
+        return False
+
+def autofit_columns(worksheet):
+    """Function to adjust column width automatically"""
+    for column in worksheet.columns:
+        max_length = 0
+        column_letter = get_column_letter(column[0].column)
+
+        # Find the maximum text length in the column
+        for cell in column:
+            try:
+                if cell.value:
+                    cell_length = len(str(cell.value))
+                    if cell_length > max_length:
+                        max_length = cell_length
+            except:
+                pass
+
+        # Add some extra space and set column width
+        adjusted_width = (max_length + 2)
+        worksheet.column_dimensions[column_letter].width = adjusted_width
+
+
+# SECTION 1: Process raw data and add formulas
+print("=" * 50)
+print("MEMULAI PEMROSESAN DATA")
+print("=" * 50)
+overall_start_time = time.time()
+
+try:
+    section1_start = time.time()
+    print(f"SECTION 1: Memproses data mentah dan menambahkan formula...")
+    print(f"Waktu mulai: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    df_ref = pd.DataFrame(data)
+
+    headers = ['TODAY', 'AGING UPDATEAN TERBARU', 'DATE FU', 'PERHITUNGAN AGING',
+               'AGING FM SALES', 'LEADS IN', 'AGING EFORM CUST', 'AGING UH', 'AGING MCE']
+
+    # Load and prepare workbook
+    step_start = time.time()
+    print("  → Loading workbook...")
+    wb = openpyxl.load_workbook(file_raw)
+    ws = wb['RPT_DIGITAL_LEADS_HO_2025']
+    ws.insert_cols(idx=14, amount=1)
+    start_col = ws.max_column + 1
+    max_row = ws.max_row
+    print(f"  ✓ Workbook loaded. Total rows: {max_row:,} | Waktu: {time.time() - step_start:.2f}s")
+
+    # Create reference sheet
+    step_start = time.time()
+    print("  → Creating reference sheet...")
+    if 'Ref' in wb.sheetnames:
+        del wb['Ref']
+    ws_ref = wb.create_sheet('Ref')
+
+    for r in dataframe_to_rows(df_ref, index=False, header=True):
+        ws_ref.append(r)
+    print(f"  ✓ Reference sheet created | Waktu: {time.time() - step_start:.2f}s")
+
+    # Add Wilayah column header
+    ws.cell(row=1, column=14).value = 'Wilayah'
+
+    # Add VLOOKUP formula for Wilayah mapping
+    step_start = time.time()
+    print("  → Adding VLOOKUP formulas for Wilayah mapping...")
+    for row in tqdm(range(2, max_row + 1), desc="  Processing VLOOKUP"):
+        ws.cell(row=row, column=14).value = f'=IFERROR(VLOOKUP(L{row},Ref!$A$2:$B${len(df_ref) + 1},2,FALSE),"")'
+    print(f"  ✓ VLOOKUP formulas added | Waktu: {time.time() - step_start:.2f}s")
+
+    # Add new column headers
+    for i, header in enumerate(headers):
+        ws.cell(row=1, column=start_col + i).value = header
+
+    # Add TODAY values
+    step_start = time.time()
+    print("  → Adding TODAY values...")
+    for row in tqdm(range(2, max_row + 1), desc="  Processing TODAY"):
+        ws.cell(row=row, column=106).value = today
+    print(f"  ✓ TODAY values added | Waktu: {time.time() - step_start:.2f}s")
+
+    # Add AGING UPDATEAN TERBARU formula
+    step_start = time.time()
+    print("  → Adding AGING UPDATEAN TERBARU formulas...")
+    for row in tqdm(range(2, max_row + 1), desc="  Processing AGING UPDATE"):
+        aging_formula = f'=IF(Z{row}="","",IF(DD{row}="",TODAY()-Z{row},DD{row}-Z{row}))'
+        ws.cell(row=row, column=107).value = aging_formula
+    print(f"  ✓ AGING UPDATEAN formulas added | Waktu: {time.time() - step_start:.2f}s")
+
+    # Add DATE FU formula
+    step_start = time.time()
+    print("  → Adding DATE FU formulas...")
+    for row in tqdm(range(2, max_row + 1), desc="  Processing DATE FU"):
+        formula_datefu = (
+            f'=IFERROR('
+            f'IF(AND(A{row}="NMC",AA{row}<>""),AA{row},'
+            f'IF(AND(A{row}="MMU",AA{row}<>""),AA{row},'
+            f'IF(AND(A{row}="REFI",CU{row}<>""),CU{row},'
+            f'IF(AND(A{row}="REFI",CU{row}="",AA{row}<>""),AA{row},'
+            f'IF(AND(A{row}="MPF",CQ{row}<>""),CQ{row},'
+            f'IF(AND(A{row}="MPF",CQ{row}="",AA{row}<>""),AA{row},""))))))'
+            f',"")'
+        )
+        ws.cell(row=row, column=108).value = formula_datefu
+    print(f"  ✓ DATE FU formulas added | Waktu: {time.time() - step_start:.2f}s")
+
+    # Add remaining formulas with progress tracking
+    formulas_to_add = [
+        ("PERHITUNGAN AGING", 109, lambda row: f'=IF(DC{row}<=3,"0-3",IF(DC{row}<=7,"4-7",">7"))'),
+        ("AGING FM SALES", 110, lambda row: f'=IF(CU{row}<>"",CU{row}-Z{row},"")'),
+        ("LEADS IN", 111, lambda row: f'=IF(BH{row}<>"",1,0)'),
+        ("AGING EFORM CUST", 112, lambda row: f'=IF(U{row}="","",U{row}-T{row})'),
+        ("AGING UH", 113, lambda row: f'=IF(CS{row}<>"",CS{row}-Z{row},"")'),
+        ("AGING MCE", 114, lambda row: f'=IF(CU{row}<>"",CU{row}-CS{row},"")'),
+    ]
+
+    for formula_name, col_num, formula_func in formulas_to_add:
+        step_start = time.time()
+        print(f"  → Adding {formula_name} formulas...")
+        for row in tqdm(range(2, max_row + 1), desc=f"  Processing {formula_name}"):
+            ws.cell(row=row, column=col_num).value = formula_func(row)
+        print(f"  ✓ {formula_name} formulas added | Waktu: {time.time() - step_start:.2f}s")
+
+    # Save workbook
+    step_start = time.time()
+    print("  → Saving temporary file...")
+    wb.save(output_file)
+    remove_formulas_with_xlwings(output_file, output_temp)
+    print(f"  ✓ File saved: {output_temp} | Waktu: {time.time() - step_start:.2f}s")
+
+    section1_time = time.time() - section1_start
+    print(f"SECTION 1 SELESAI | Total waktu: {section1_time:.2f} detik")
+    logging.info(f"File telah di save {output_temp}.")
+
+except Exception as e:
+    logging.error(f"Error pada SECTION 1: {e}")
+
+# SECTION 2: Create pivot tables
+try:
+    section2_start = time.time()
+    print(f"\nSECTION 2: Membuat pivot tables...")
+    print(f"Waktu mulai: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    step_start = time.time()
+    print("  → Loading Excel file untuk pivot analysis...")
+    df_dl = pd.read_excel(output_temp)
+    print(f"  ✓ File loaded. Shape: {df_dl.shape} | Waktu: {time.time() - step_start:.2f}s")
+
+    # ====== HIGHLIGHT: ADDED DATETIME CONVERSION SECTION ======
+    step_start = time.time()
+    print("  → Converting datetime columns...")
+
+    # Define datetime columns that need conversion
+    datetime_columns = [
+        'DATE_FIRST_FOLLOWUP',
+        'DATE_ASSIGN_TO_UH',
+        'FM Connect / FM Sales Date',
+        'Contract Active Date',
+        'DATE FU'
+    ]
+
+    # Convert reference date once
+    reference_date = pd.to_datetime(tanggal, format='%d/%m/%Y')
+    print(f"    Reference date: {reference_date}")
+
+    # Convert all datetime columns
+    for col in datetime_columns:
+        if col in df_dl.columns:
+            print(f"    Converting column: {col}")
+            df_dl[col] = pd.to_datetime(df_dl[col], errors='coerce')
+            non_null_count = df_dl[col].notna().sum()
+            print(f"      Valid dates: {non_null_count:,}")
+        else:
+            print(f"    Warning: Column '{col}' not found")
+
+    print(f"  ✓ DateTime conversion completed | Waktu: {time.time() - step_start:.2f}s")
+
+    # Data validation - improved logic to handle NaN and non-finite values
+    step_start = time.time()
+    print("  → Validating data (replacing values > 456 with NaN)...")
+    for col in tqdm(validation_column, desc="  Validating columns"):
+        if col in df_dl.columns:
+            # Convert to numeric, coercing errors to NaN
+            df_dl[col] = pd.to_numeric(df_dl[col], errors='coerce')
+            # Replace values > 456 with NaN, but only for finite values
+            mask = (df_dl[col].notna()) & (df_dl[col] > 456)
+            df_dl.loc[mask, col] = np.nan
+        else:
+            print(f"  Warning: Column '{col}' not found in dataframe")
+    print(f"  ✓ Data validation completed | Waktu: {time.time() - step_start:.2f}s")
+
+    # PEMBERSIHAN NILAI NEGATIF
+    step_start = time.time()
+    print("  → Membersihkan nilai negatif pada kolom aging...")
+
+    # Definisikan kolom yang perlu dibersihkan
+    aging_columns = ['AGING UH', 'AGING MCE', 'AGING FM SALES', 'AGING EFORM CUST']
+    negative_stats = {}
+
+    for col in tqdm(aging_columns, desc="  Cleaning negative values"):
+        if col in df_dl.columns:
+            # Konversi ke numeric terlebih dahulu (jika belum)
+            df_dl[col] = pd.to_numeric(df_dl[col], errors='coerce')
+
+            # Hitung statistik nilai negatif
+            negative_mask = df_dl[col] < 0
+            negative_count = negative_mask.sum()
+            total_non_null = df_dl[col].notna().sum()
+
+            if negative_count > 0:
+                negative_stats[col] = {
+                    'count': negative_count,
+                    'percentage': (negative_count / total_non_null * 100) if total_non_null > 0 else 0,
+                    'min_value': df_dl.loc[negative_mask, col].min(),
+                    'max_value': df_dl.loc[negative_mask, col].max()
+                }
+                df_dl[col] = df_dl[col].abs()
+
+    # Print statistik pembersihan
+    if negative_stats:
+        print("  📊 Statistik nilai negatif yang dibersihkan:")
+        for col, stats in negative_stats.items():
+            print(f"    • {col}: {stats['count']:,} nilai ({stats['percentage']:.1f}%)")
+            print(f"      Range: {stats['min_value']:.1f} hingga {stats['max_value']:.1f}")
+    else:
+        print("  ✓ Tidak ada nilai negatif ditemukan pada kolom aging")
+
+    print(f"  ✓ Pembersihan nilai negatif selesai | Waktu: {time.time() - step_start:.2f}s")
+
+    # VALIDASI TAMBAHAN: Cek apakah masih ada nilai negatif
+    print("  → Validasi final...")
+    remaining_negatives = {}
+    for col in aging_columns:
+        if col in df_dl.columns:
+            neg_count = (df_dl[col] < 0).sum()
+            if neg_count > 0:
+                remaining_negatives[col] = neg_count
+
+    if remaining_negatives:
+        print(f"  ⚠️ Masih ada nilai negatif: {remaining_negatives}")
+    else:
+        print("  ✅ Semua nilai negatif telah dibersihkan")
+
+    # OPSIONAL: Buat summary report untuk aging data
+    print("  → Membuat summary statistik aging...")
+    aging_summary = {}
+    for col in aging_columns:
+        if col in df_dl.columns and df_dl[col].notna().sum() > 0:
+            aging_summary[col] = {
+                'count': df_dl[col].notna().sum(),
+                'mean': df_dl[col].mean(),
+                'median': df_dl[col].median(),
+                'min': df_dl[col].min(),
+                'max': df_dl[col].max(),
+                'std': df_dl[col].std()
+            }
+
+    # Print summary
+    print("  📈 Summary statistik aging setelah pembersihan:")
+    for col, stats in aging_summary.items():
+        print(f"    • {col}:")
+        print(f"      Count: {stats['count']:,} | Mean: {stats['mean']:.1f} | Median: {stats['median']:.1f}")
+        print(f"      Range: {stats['min']:.1f} - {stats['max']:.1f} | Std: {stats['std']:.1f}")
+
+    print("  ✓ Summary statistik selesai")
+
+    # Create pivot tables with progress tracking
+    pivot_operations = [
+        ("AGING FM SALES", "df_aging_fmsales"),
+        ("AGING UH", "df_aging_uh"),
+        ("AGING MCE", "df_aging_mce"),
+        ("AGING EFORM", "df_aging_eform"),
+        ("LEADS IN", "df_leadsin"),
+        ("LEADS CLEAN", "df_leadsclean"),
+        ("BOOKING", "df_booking"),
+        ("FU LEADS", "df_fuleads"),
+        ("AGING FM SALES JABAL", "df_aging_fmsales_jabal"),
+        ("AGING FM SALES NON JABAL", "df_aging_fmsales_nonjabal")
+    ]
+
+    step_start = time.time()
+    print("  → Creating filtered datasets...")
+
+    # Create pivot tables for aging analysis by area
+    df_aging_fmsales = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == periode) &
+        (df_dl['Wilayah'].isin(['JAWA BALI', 'NON JAWA BALI'])) &
+        (df_dl['DATE_FIRST_FOLLOWUP'] > pd.to_datetime(tanggal))
+        ]
+
+    pivot_fmsales = pd.pivot_table(df_aging_fmsales,
+                                   index='Area',
+                                   values='AGING FM SALES',
+                                   aggfunc='mean',
+                                   fill_value=0,
+                                   margins=True,
+                                   margins_name='Total FM Sales')  # FIXED: Unique name
+
+    df_aging_uh = df_dl[
+        (df_dl['Wilayah'].isin(['JAWA BALI', 'NON JAWA BALI'])) &
+        (df_dl['DATE_ASSIGN_TO_UH'] > pd.to_datetime(tanggal)) &
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == 202505)
+        ]
+
+    pivot_aginguh = pd.pivot_table(df_aging_uh,
+                                   index='Area',
+                                   values='AGING UH',
+                                   aggfunc='mean',
+                                   fill_value=0,
+                                   margins=True,
+                                   margins_name='Total UH')  # FIXED: Unique name
+
+    df_aging_mce = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == periode) &
+        (df_dl['Wilayah'].isin(['JAWA BALI', 'NON JAWA BALI'])) &
+        (df_dl['DATE_FIRST_FOLLOWUP'] > pd.to_datetime(tanggal))
+        ]
+
+    pivot_agingmce = pd.pivot_table(df_aging_mce,
+                                    index='Area',
+                                    values='AGING MCE',
+                                    aggfunc='mean',
+                                    fill_value=0,
+                                    margins=True,
+                                    margins_name='Total MCE')  # FIXED: Unique name
+
+    df_aging_eform = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == periode) &
+        (df_dl['Wilayah'].isin(['JAWA BALI', 'NON JAWA BALI'])) &
+        (df_dl['Status E-Form Customer'].isin(['INTERESTED', 'NOT INTERESTED', 'NOT ANSWERED']))
+        ]
+
+    pivot_eformcust = pd.pivot_table(df_aging_eform,
+                                     index='Area',
+                                     values='AGING EFORM CUST',
+                                     aggfunc='mean',
+                                     fill_value=0,
+                                     margins=True,
+                                     margins_name='Total E-Form')  # FIXED: Unique name
+
+    # Create pivot tables for leads analysis by area
+    df_leadsin = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['LEADS IN'] == 1) &
+        (df_dl['Periode'] == periode)
+        ]
+
+    pivot_leadsin = pd.pivot_table(df_leadsin,
+                                   index='Area',
+                                   values='Digital Leads ID',
+                                   aggfunc='count',
+                                   fill_value=0,
+                                   margins=True,
+                                   margins_name='Total Leads In')  # FIXED: Unique name
+
+    df_leadsclean = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['FM Connect / FM Sales Date'] > pd.to_datetime(tanggal)) &
+        (df_dl['Periode'] == periode)
+        ]
+
+    pivot_leadsclean = pd.pivot_table(df_leadsclean,
+                                      index='Area',
+                                      values='Digital Leads ID',
+                                      aggfunc='count',
+                                      fill_value=0,
+                                      margins=True,
+                                      margins_name='Total Clean')  # FIXED: Unique name
+
+    df_booking = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Status E-Form Customer'] == 'INTERESTED') &
+        (df_dl['Contract Active Date'] > pd.to_datetime(tanggal)) &
+        (df_dl['Periode'] == periode)
+        ]
+
+    pivot_booking = pd.pivot_table(df_booking,
+                                   index='Area',
+                                   values='Contract Active Date',
+                                   aggfunc='count',
+                                   fill_value=0,
+                                   margins=True,
+                                   margins_name='Total Booking')  # FIXED: Unique name
+
+    df_fuleads = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['DATE FU'] > pd.to_datetime(tanggal)) &
+        (df_dl['Periode'] == periode)
+        ]
+
+    pivot_fuleads = pd.pivot_table(df_fuleads,
+                                   index='Area',
+                                   values='Digital Leads ID',
+                                   aggfunc='count',
+                                   fill_value=0,
+                                   margins=True,
+                                   margins_name='Total FU')  # FIXED: Unique name
+
+    # FIXED: Handle the join operation more carefully
+    print("  → Combining pivot tables for gap analysis...")
+
+    # Reset index to make 'Area' a regular column for joining
+    pivot_leadsclean_reset = pivot_leadsclean.reset_index()
+    pivot_fuleads_reset = pivot_fuleads.reset_index()
+
+    # Remove the margin rows before joining
+    pivot_leadsclean_clean = pivot_leadsclean_reset[pivot_leadsclean_reset['Area'] != 'Total Clean'].copy()
+    pivot_fuleads_clean = pivot_fuleads_reset[pivot_fuleads_reset['Area'] != 'Total FU'].copy()
+
+    # Merge the dataframes
+    pivot_gap = pd.merge(pivot_leadsclean_clean, pivot_fuleads_clean, on='Area', how='outer',
+                         suffixes=('_clean', '_fuleads'))
+
+    # Fill NaN values with 0
+    pivot_gap['Digital Leads ID_clean'] = pivot_gap['Digital Leads ID_clean'].fillna(0)
+    pivot_gap['Digital Leads ID_fuleads'] = pivot_gap['Digital Leads ID_fuleads'].fillna(0)
+
+    # Calculate UNFU LEADS
+    pivot_gap['UNFU LEADS'] = pivot_gap['Digital Leads ID_clean'] - pivot_gap['Digital Leads ID_fuleads']
+
+    # Set Area as index back
+    pivot_gap = pivot_gap.set_index('Area')
+
+    # Create the final pivot table for gap leads
+    pivot_gapleads = pivot_gap[['UNFU LEADS']].copy()
+
+    # Add total row manually
+    total_unfu = pivot_gapleads['UNFU LEADS'].sum()
+    pivot_gapleads.loc['Total Gap'] = total_unfu  # FIXED: Unique name
+
+    # Create pivot tables by region (Jawa Bali vs Non Jawa Bali)
+    df_aging_fmsales_jabal = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == periode) &
+        (df_dl['Wilayah'].isin(['JAWA BALI'])) &
+        (df_dl['DATE_FIRST_FOLLOWUP'] > pd.to_datetime(tanggal))
+        ]
+
+    pivot_fmsalesjabal = pd.pivot_table(df_aging_fmsales_jabal,
+                                        index='Nama Cabang',
+                                        values='AGING FM SALES',
+                                        aggfunc='mean',
+                                        fill_value=0,
+                                        margins=True,
+                                        margins_name='Total Jabal')  # FIXED: Unique name
+
+    df_aging_fmsales_nonjabal = df_dl[
+        (df_dl['Buss Unit'] == 'REFI') &
+        (df_dl['Periode'] == periode) &
+        (df_dl['Wilayah'].isin(['NON JAWA BALI'])) &
+        (df_dl['DATE_FIRST_FOLLOWUP'] > pd.to_datetime(tanggal))
+        ]
+
+    pivot_fmsalesnonjabal = pd.pivot_table(df_aging_fmsales_nonjabal,
+                                           index='Nama Cabang',
+                                           values='AGING FM SALES',
+                                           aggfunc='mean',
+                                           fill_value=0,
+                                           margins=True,
+                                           margins_name='Total Non-Jabal')  # FIXED: Unique name
+
+    print(f"  ✓ All pivot tables created | Waktu: {time.time() - step_start:.2f}s")
+
+    # SECTION 3: Write pivot tables to Excel with formatting
+    section3_start = time.time()
+    print(f"\nSECTION 3: Writing pivot tables to Excel...")
+
+    excel_operations = [
+        ("BY AREA AGING - REFI", [
+            (pivot_fmsales, 2, 2),
+            (pivot_aginguh, 2, 6),
+            (pivot_agingmce, 2, 10),
+            (pivot_eformcust, 2, 14)
+        ]),
+        ("BY AREA - REFI", [
+            (pivot_leadsin, 2, 2),
+            (pivot_leadsclean, 2, 6),
+            (pivot_booking, 2, 10),
+            (pivot_fuleads, 2, 14),
+            (pivot_gapleads, 2, 18)
+        ]),
+        ("SUMMARY AREA", [
+            (pivot_fmsalesjabal, 2, 2),
+            (pivot_fmsalesnonjabal, 2, 6)
+        ])
+    ]
+
+    for sheet_name, operations in excel_operations:
+        step_start = time.time()
+        print(f"  → Writing to sheet: {sheet_name}...")
+
+        for i, (pivot_table, startrow, startcol) in enumerate(operations):
+            if i == 0:
+                # First write creates the sheet
+                with pd.ExcelWriter(output_file, engine='openpyxl',
+                                    mode='w' if sheet_name == excel_operations[0][0] else 'a') as writer:
+                    pivot_table.to_excel(writer, sheet_name=sheet_name, startrow=startrow, startcol=startcol)
+            else:
+                # Subsequent writes append to existing sheet
+                with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                    pivot_table.to_excel(writer, sheet_name=sheet_name, startrow=startrow, startcol=startcol)
+
+        # Format the sheet
+        with pd.ExcelWriter(output_file, engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+            workbook = writer.book
+            worksheet = workbook[sheet_name]
+
+            # Format numbers
+            for row in worksheet.iter_rows(min_row=3, max_row=worksheet.max_row, min_col=3,
+                                           max_col=worksheet.max_column):
+                for cell in row:
+                    if isinstance(cell.value, (int, float)) and sheet_name in ['BY AREA AGING - REFI', 'SUMMARY AREA']:
+                        cell.number_format = '#,##0.00'
+
+            autofit_columns(worksheet)
+
+        print(f"  ✓ Sheet {sheet_name} completed | Waktu: {time.time() - step_start:.2f}s")
+
+    section2_time = time.time() - section2_start
+    print(f"SECTION 2 & 3 SELESAI | Total waktu: {section2_time:.2f} detik")
+
+except Exception as e:
+    logging.error(f'Error pada SECTION 2: {e}')
+
+# Final summary
+overall_time = time.time() - overall_start_time
+print("\n" + "=" * 50)
+print("RINGKASAN PEMROSESAN")
+print("=" * 50)
+print(f"Waktu selesai: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+print(f"Total waktu pemrosesan: {overall_time:.2f} detik ({overall_time / 60:.2f} menit)")
+print(f"File output: {output_file}")
+print("=" * 50)
+
+logging.info(
+    f"File {output_file} telah dibuat dengan ukuran kolom yang disesuaikan. Total waktu: {overall_time:.2f} detik")
