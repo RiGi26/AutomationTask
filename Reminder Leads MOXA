@@ -1,0 +1,324 @@
+import os
+import logging
+from datetime import datetime
+import pandas as pd
+import numpy as np
+from pathlib import Path
+
+START_DATE = '2024-01-01'
+END_DATE = '2025-05-31'
+
+
+class MOXADataProcessor:
+    """Process MOXA lead data and generate dealer-specific Excel files."""
+
+    def __init__(self, input_file_path, output_dir):
+        self.input_file_path = Path(input_file_path)
+        self.output_dir = Path(output_dir)
+        self.current_date = datetime.now().strftime("%Y%m%d")
+
+        # Setup basic logging (keep for error handling)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Define columns to include in final output
+        self.columns_to_include = [
+            "Id Leads Data User", "Nama", "Gender", "Alamat", "Kelurahan", "Kecamatan", "Kota/Kabupaten",
+            "Propinsi", "No HP", "No Hp-2", "Sales Date", "Varian Motor", "Main Dealer",
+            "Assign Dealer Code (5 DIGIT)", "Propensity", "Pekerjaan", "Pendidikan",
+            "Pengeluaran", "Agama", "Tanggal Lahir", "Frame No Terakhir", "Jenis Penjualan",
+            "Sales ID", "Nama Leasing Sebelumnya", "Nama salesman", "Source Leads",
+            "Platform Data", "Dealer Sebelumnya (Jika Ada)", "Remarks/Keterangan",
+            "Rekomendasi DP/Angsuran (Tenure)", "Varian motor yang diinginkan",
+            "Warna varian motor", "E-MAIL", "FACEBOOK", "INSTAGRAM", "TWITTER", "Dispatch Date"
+        ]
+
+    def print_header(self):
+        """Print attractive header for the process."""
+        print(f"\n🚀 MOXA DATA PROCESSING STARTED")
+        print(f"📅 Date: {datetime.now().strftime('%d %B %Y')}")
+        print(f"📂 Input File: {self.input_file_path}")
+        print(f"📂 Output Directory: {self.output_dir}")
+        print(f"{'=' * 80}")
+
+    def load_and_filter_data(self, start_date=START_DATE, end_date=END_DATE):
+        """Load and filter the lead data based on specified criteria."""
+        try:
+            print(f"\n📊 LOADING DATA...")
+
+            # Check if file exists
+            if not self.input_file_path.exists():
+                print(f"   ❌ Error: Input file not found: {self.input_file_path}")
+                raise FileNotFoundError(f"Input file not found: {self.input_file_path}")
+
+            # Load the data
+            recap_data = pd.read_excel(self.input_file_path)
+            print(f"   ✅ Data loaded successfully!")
+            print(f"   📋 Total Records: {len(recap_data):,}")
+            print(f"   📋 Total Columns: {len(recap_data.columns)}")
+
+            # Convert Dispatch Date to datetime, handling mixed types
+            if 'Dispatch Date' in recap_data.columns:
+                recap_data['Dispatch Date'] = pd.to_datetime(recap_data['Dispatch Date'], errors='coerce')
+                print(f"   ✅ Dispatch Date column converted to datetime")
+
+            print(f"\n🔍 APPLYING FILTERS...")
+
+            # Filter data based on conditions
+            print(f"   🎯 Filter 1: Records with missing 'Update Status Date' but existing 'Dispatch Date'")
+            filtered_data = recap_data[
+                recap_data["Update Status Date"].isna() &
+                recap_data["Dispatch Date"].notna()
+                ]
+            print(f"   📊 After Filter 1: {len(filtered_data):,} records")
+
+            # Date range filter
+            start_date = pd.to_datetime(start_date)
+            end_date = pd.to_datetime(end_date)
+
+            print(f"   🎯 Filter 2: Dispatch Date between {start_date.date()} and {end_date.date()}")
+            filtered_data = filtered_data[
+                (filtered_data["Dispatch Date"] >= start_date) &
+                (filtered_data["Dispatch Date"] <= end_date)
+                ]
+            print(f"   📊 After Filter 2: {len(filtered_data):,} records")
+
+            print(f"\n📋 SELECTING REQUIRED COLUMNS...")
+            # Select only required columns (handle missing columns gracefully)
+            available_columns = [col for col in self.columns_to_include if col in filtered_data.columns]
+            missing_columns = set(self.columns_to_include) - set(available_columns)
+
+            if missing_columns:
+                print(f"   ⚠️  WARNING: Missing columns in data: {missing_columns}")
+
+            print(f"   📊 Selected {len(available_columns)} columns (out of {len(self.columns_to_include)} required)")
+            final_data = filtered_data[available_columns].copy()
+
+            return final_data
+
+        except Exception as e:
+            print(f"   ❌ Error loading/filtering data: {str(e)}")
+            self.logger.error(f"Error loading/filtering data: {str(e)}")
+            raise
+
+    def write_to_excel(self, dataframe, file_path, sheet_name="Sheet1"):
+        """Write DataFrame to Excel with formatting."""
+        try:
+            print(f"   💾 Writing Excel file with formatting...")
+            # Fill NaN values with empty string
+            dataframe = dataframe.fillna('')
+
+            with pd.ExcelWriter(file_path, engine="xlsxwriter") as writer:
+                dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+                workbook = writer.book
+                worksheet = writer.sheets[sheet_name]
+
+                # Define formats
+                border_format = workbook.add_format({"border": 1})
+                date_format = workbook.add_format({'num_format': 'dd/mm/yyyy', 'border': 1})
+                header_format = workbook.add_format({
+                    'bold': True,
+                    'border': 1,
+                    'bg_color': '#D3D3D3'
+                })
+
+                # Apply formatting
+                for row_num in range(len(dataframe) + 1):
+                    for col_num, col in enumerate(dataframe.columns):
+                        if row_num == 0:  # Header row
+                            worksheet.write(row_num, col_num, col, header_format)
+                        else:  # Data rows
+                            value = dataframe.iloc[row_num - 1, col_num]
+
+                            if col == 'Dispatch Date' and pd.notna(value):
+                                worksheet.write(row_num, col_num, value, date_format)
+                            else:
+                                worksheet.write(row_num, col_num, value, border_format)
+
+                # Auto-adjust column widths
+                for idx, col in enumerate(dataframe.columns):
+                    max_len = max(
+                        dataframe[col].astype(str).map(len).max(),
+                        len(col)
+                    ) + 2
+                    # Cap maximum width to prevent extremely wide columns
+                    max_len = min(max_len, 50)
+                    worksheet.set_column(idx, idx, max_len)
+
+            print(f"   ✅ Excel formatting applied!")
+
+        except Exception as e:
+            print(f"   ❌ Error writing Excel file {file_path}: {str(e)}")
+            self.logger.error(f"Error writing Excel file {file_path}: {str(e)}")
+            raise
+
+    def normalize_phone_number(self, phone):
+        """Normalize phone number format."""
+        if pd.isna(phone):
+            return ""
+
+        phone_str = str(phone).strip()
+
+        # Remove any non-digit characters except +
+        phone_clean = ''.join(c for c in phone_str if c.isdigit() or c == '+')
+
+        # Handle Indonesian phone numbers
+        if phone_clean.startswith('+62'):
+            phone_clean = '0' + phone_clean[3:]
+        elif phone_clean.startswith('62') and len(phone_clean) > 10:
+            phone_clean = '0' + phone_clean[2:]
+        elif not phone_clean.startswith('0') and phone_clean.isdigit():
+            phone_clean = '0' + phone_clean
+
+        return phone_clean
+
+    def process_dealer_data(self, dealer_name, final_data, dealer_num, total_dealers):
+        """Process data for a specific dealer."""
+        try:
+            print(f"\n🏢 PROCESSING [{dealer_num}/{total_dealers}]: {dealer_name}")
+
+            # Special handling for MPM dealers
+            if dealer_name in ["PT MPM - MALANG", "PT MPM - SURABAYA"]:
+                print(f"   🎯 Special Processing: MPM Dealer")
+                kolom_mpm = {
+                    "Id Leads Data User": "Id Leads Data User",
+                    "Nama": "Nama",
+                    "No HP": "No HP",
+                    "Kota/Kabupaten": "Kota/Kabupaten",
+                    "Kelurahan": "Kelurahan",
+                    "Kecamatan": "Kecamatan",
+                    "Alamat": "Alamat"
+                }
+                kolom_akhir = [
+                    "Id Leads Data User", "Nama", "No HP", "Kota/Kabupaten",
+                    "Kode Dealer Refrensi", "Alamat", "Kelurahan", "Kecamatan"
+                ]
+
+                available_mpm_cols = [col for col in kolom_mpm.values() if col in final_data.columns]
+                df_pindah = final_data[available_mpm_cols].rename(columns=kolom_mpm).copy()
+                df_final = df_pindah.reindex(columns=kolom_akhir, fill_value="")
+            else:
+                print(f"   🎯 Standard Processing: Regular Dealer")
+                # Filter data for specific dealer
+                df_final = final_data[final_data["Main Dealer"] == dealer_name].copy()
+
+            record_count = len(df_final)
+            print(f"   📊 Records to Process: {record_count:,}")
+
+            if record_count == 0:
+                print(f"   ⚠️  WARNING: No records found for this dealer!")
+                return
+
+            print(f"   🔧 DATA PREPROCESSING...")
+            # Normalize phone numbers
+            if "No HP" in df_final.columns:
+                print(f"   🔢 Formatting phone numbers...")
+                df_final["No HP"] = df_final["No HP"].apply(self.normalize_phone_number)
+                print(f"   ✅ Phone numbers formatted!")
+
+            # Generate output file
+            safe_dealer_name = "".join(c for c in dealer_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            output_path = self.output_dir / f"Reminder Data Leads {safe_dealer_name}.xlsx"
+
+            self.write_to_excel(df_final, output_path)
+            print(f"   ✅ File created successfully!")
+            print(f"   📁 Location: {output_path}")
+
+        except Exception as e:
+            print(f"   ❌ FAILED to process {dealer_name}: {e}")
+            self.logger.error(f"Error processing dealer {dealer_name}: {str(e)}")
+
+    def process_all(self, start_date=START_DATE, end_date=END_DATE):
+        """Main processing function."""
+        try:
+            self.print_header()
+
+            # Load and filter data
+            final_data = self.load_and_filter_data(start_date, end_date)
+
+            if len(final_data) == 0:
+                print(f"\n⚠️  WARNING: No data to process after filtering")
+                return
+
+            print(f"\n💾 SAVING MASTER FILE...")
+            # Create master file
+            master_output_path = self.output_dir / f"Reminder Data Leads Master.xlsx"
+            try:
+                final_data.to_excel(master_output_path, index=False)
+                print(f"   ✅ Master file saved: {master_output_path}")
+                print(f"   📋 Total Records: {len(final_data):,}")
+            except Exception as e:
+                print(f"   ❌ Error saving master file: {e}")
+                raise
+
+            # Process individual dealers
+            if "Main Dealer" in final_data.columns:
+                unique_dealers = final_data["Main Dealer"].dropna().unique()
+
+                print(f"\n🏢 MAIN DEALERS FOUND:")
+                print(f"   📊 Total Unique Main Dealers: {len(unique_dealers)}")
+                for i, dealer in enumerate(unique_dealers, 1):
+                    dealer_count = len(final_data[final_data["Main Dealer"] == dealer])
+                    print(f"   {i:2d}. {dealer} ({dealer_count:,} records)")
+
+                print(f"\n{'=' * 80}")
+                print(f"\n🔄 PROCESSING INDIVIDUAL DEALER FILES...")
+                print(f"{'=' * 80}")
+
+                successful_files = 0
+                failed_files = 0
+
+                for i, dealer in enumerate(unique_dealers, 1):
+                    try:
+                        self.process_dealer_data(dealer, final_data, i, len(unique_dealers))
+                        successful_files += 1
+                    except Exception as e:
+                        print(f"   ❌ FAILED to process {dealer}: {e}")
+                        failed_files += 1
+
+                # Final summary
+                print(f"\n🎉 MOXA DATA PROCESSING COMPLETED!")
+                print(f"{'=' * 80}")
+                print(f"📊 FINAL SUMMARY:")
+                print(f"   📋 Total Records Processed: {len(final_data):,}")
+                print(f"   🏢 Total Main Dealers: {len(unique_dealers)}")
+                print(f"   ✅ Successful Files: {successful_files}")
+                print(f"   ❌ Failed Files: {failed_files}")
+                print(f"   📁 Master File: Reminder Data Leads Master.xlsx")
+                print(f"   📂 Output Directory: {self.output_dir}")
+                print(f"{'=' * 80}")
+
+                if failed_files > 0:
+                    print(f"⚠️  Some files failed to process. Please check the error messages above.")
+                else:
+                    print(f"🎊 All files processed successfully!")
+            else:
+                print(f"\n⚠️  WARNING: Main Dealer column not found, skipping dealer-specific processing")
+
+        except Exception as e:
+            print(f"\n❌ CRITICAL ERROR in main processing: {str(e)}")
+            self.logger.error(f"Error in main processing: {str(e)}")
+            raise
+
+
+def main():
+    """Main execution function."""
+    # Configuration
+    input_file = r"D:\Daily MOXA\Leads FIFGROUP Compile all MD v2.xlsx"
+    output_directory = r"D:\Daily MOXA\Data Reminder Moxa"
+
+    # Create processor instance
+    processor = MOXADataProcessor(input_file, output_directory)
+
+    # Process data
+    processor.process_all()
+
+
+if __name__ == "__main__":
+    main()
