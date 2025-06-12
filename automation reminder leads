@@ -1,0 +1,161 @@
+import pandas as pd
+import win32com.client as win32
+from pathlib import Path
+from datetime import datetime
+import time
+
+# Setting Date
+current_date = datetime.now().strftime("%d %B %Y")
+
+# Define the folder paths
+base_path = Path("D:\\Daily MOXA\\Data Reminder Moxa")
+base_path_DaaS = Path("D:\\Daily MOXA\\Data Reminder DaaS")
+
+# Load the email list
+file = "D:\\Daily MOXA\\Automate Send to MD\\Email list reminder .xlsx"
+email_list = pd.read_excel(file)
+
+# Load the master reminder MD MOXA or DaaS
+path = "D:\\Daily MOXA\\Data Reminder Moxa\\Reminder Data Leads Master.xlsx"
+main_dealer = pd.read_excel(path)
+path_DaaS = "D:\\Daily MOXA\\Data Reminder DaaS\\Reminder Data Leads Master DaaS.xlsx"
+main_dealer_DaaS = pd.read_excel(path_DaaS)
+
+# Get unique "Main Dealer" values
+main_dealer_ids = main_dealer["Main Dealer"].unique()
+main_dealer_for_DaaS = main_dealer_DaaS["Main Dealer"].unique()
+
+# Get overlapping main dealers
+overlapping_main_dealers = set(main_dealer_ids).intersection(main_dealer_for_DaaS)
+
+# Set up Outlook
+outlook = win32.Dispatch("outlook.application")
+
+
+def attach_files(mail, attachment_filenames):
+    for filename, path_base in attachment_filenames:
+        if path_base:
+            attachment_path = path_base / filename
+            print(f"   🔍 Checking: {filename}")
+            if attachment_path.exists():
+                print(f"   ✅ Found: {attachment_path}")
+                try:
+                    mail.Attachments.Add(str(attachment_path))
+                    print(f"   📎 Attached successfully!")
+                except Exception as e:
+                    print(f"   ❌ Failed to attach: {e}")
+                time.sleep(1)
+            else:
+                print(f"   ❌ Not found: {attachment_path}")
+        else:
+            print(f"   ❌ Invalid path for: {filename}")
+
+
+def send_email(row, main_dealer_name, project_type, base_path=None):
+    print(f"\n{'=' * 60}")
+    print(f"📧 PREPARING EMAIL FOR: {main_dealer_name}")
+    print(f"📋 PROJECT TYPE: {project_type}")
+    print(f"{'=' * 60}")
+
+    if project_type == 'DaaS & MOXA':
+        subject = f"Reminder Data Leads {main_dealer_name} (DaaS & MOXA)"
+        attachment_filenames = [
+            (f"Reminder Data Leads {main_dealer_name} DaaS.xlsx", base_path_DaaS),
+            (f"Reminder Data Leads {main_dealer_name}.xlsx", base_path)
+        ]
+    elif project_type == 'DaaS':
+        subject = f"Reminder Data Leads {main_dealer_name} (DaaS)"
+        attachment_filenames = [(f"Reminder Data Leads {main_dealer_name} DaaS.xlsx", base_path_DaaS)]
+    else:
+        subject = f"Reminder Data Leads {main_dealer_name} (MOXA)"
+        attachment_filenames = [(f"Reminder Data Leads {main_dealer_name}.xlsx", base_path)]
+
+    print(f"📧 TO: {row['to']}")
+    print(f"📧 CC: {row['cc']}")
+    print(f"📧 SUBJECT: {subject}")
+
+    mail = outlook.CreateItem(0)
+    mail.To = row["to"]
+    mail.CC = row["cc"]
+    mail.Subject = subject
+    mail.HTMLBody = f"""
+    <html>
+    <body style="font-family: Calibri, sans-serif; font-size: 11pt; color: black;">
+    <p>Dear Bapak & Ibu PIC Main Dealer,</p>
+
+    <p>Sehubungan dengan adanya Project {project_type},
+    Kami ingin mengingatkan kembali untuk pemberian hasil follow up data leads  diberikan 1 hari setelah data diberikan oleh FIFGROUP.
+    </p>
+
+    <p>Berikut kami lampirkan kembali data leads yang berasal dari {project_type} dan belum ada status feedback > 3 hari.</p>
+
+    <p>Bila ada hal yang tidak sesuai atau ada pertanyaan bisa langsung menghubungi saya.</p>
+
+    <p>Terima kasih atas bantuan dan kerjasamanya,</p>
+
+    <p>Best Regards,<br>
+    Riyadh Akhdan Syafi<br>
+    <strong>CRM Data Mining</strong><br>
+    <a href="mailto:riyadh.asyafi@fifgroup.astra.co.id">riyadh.asyafi@fifgroup.astra.co.id</a>
+    </p>
+    </body>
+    </html>
+    """
+
+    # Attach files
+    print(f"\n📎 ATTACHMENT PROCESS:")
+    attach_files(mail, attachment_filenames)
+
+    # Display the email
+    mail.Display()
+
+    print(f"\n✅ EMAIL SUCCESSFULLY GENERATED!")
+    print(f"{'=' * 60}")
+    # Uncomment the line below to send the email
+    # mail.Send()
+    time.sleep(1)
+
+
+# Print initial summary
+print(f"\n🚀 EMAIL AUTOMATION STARTED")
+print(f"📅 Date: {current_date}")
+print(f"📊 Total Main Dealers in Email List: {len(email_list)}")
+print(f"📊 Main Dealers in MOXA Master: {len(main_dealer_ids)}")
+print(f"📊 Main Dealers in DaaS Master: {len(main_dealer_for_DaaS)}")
+print(f"📊 Overlapping Main Dealers: {len(overlapping_main_dealers)}")
+print(f"{'=' * 80}")
+
+# Main logic for sending emails
+email_count = 0
+for index, row in email_list.iterrows():
+    main_dealer_name = row["Main Dealer"]
+    email_count += 1
+
+    # Check if main dealer exists in MOXA data
+    is_in_moxa = main_dealer_name in main_dealer_ids
+    # Check if main dealer exists in DaaS data
+    is_in_daas = main_dealer_name in main_dealer_for_DaaS
+
+    print(f"\n🏢 PROCESSING [{email_count}/{len(email_list)}]: {main_dealer_name}")
+    print(f"   📋 MOXA Data: {'✅ Available' if is_in_moxa else '❌ Not Found'}")
+    print(f"   📋 DaaS Data: {'✅ Available' if is_in_daas else '❌ Not Found'}")
+
+    if is_in_moxa and is_in_daas:
+        # Main dealer is in both MOXA and DaaS lists
+        print(f"   🎯 ACTION: Sending DaaS & MOXA Email")
+        send_email(row, main_dealer_name, 'DaaS & MOXA', base_path)
+    elif is_in_moxa and not is_in_daas:
+        # Main dealer is only in MOXA list
+        print(f"   🎯 ACTION: Sending MOXA Only Email")
+        send_email(row, main_dealer_name, 'MOXA', base_path)
+    elif not is_in_moxa and is_in_daas:
+        # Main dealer is only in DaaS list
+        print(f"   🎯 ACTION: Sending DaaS Only Email")
+        send_email(row, main_dealer_name, 'DaaS', base_path_DaaS)
+    else:
+        # Main dealer is not in either list
+        print(f"   ⚠️  WARNING: Main dealer not found in any master data!")
+        print(f"   ❌ ACTION: Skipping email generation")
+
+print(f"\n🎉 EMAIL AUTOMATION COMPLETED!")
+print(f"{'=' * 80}")
